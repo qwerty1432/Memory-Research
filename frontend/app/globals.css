@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --cream-light: #fff8e7;
+  --cream-mid: #f5e6d3;
+  --cream-dark: #d4c5a9;
+  --cream-deep: #c9b99b;
+  --cream-text: #1a1a1a;
+}
+
+body {
+  min-height: 100vh;
+  background: radial-gradient(circle at 20% 20%, #ffffff, var(--cream-light)),
+    linear-gradient(135deg, var(--cream-light), var(--cream-mid));
+  color: var(--cream-text);
+  font-family: 'Inter', 'SF Pro Display', system-ui, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', sans-serif;
+}
+
+.glass-card {
+  @apply bg-white/80 backdrop-blur-xl shadow-lg border border-white/40;
+}
+
+.lavender-btn {
+  @apply text-black font-medium rounded-full px-5 py-2 transition;
+  background: linear-gradient(135deg, #f5e6d3, #d4c5a9);
+  box-shadow: 0 10px 25px rgba(212, 197, 169, 0.35);
+}
+
+.lavender-btn:hover {
+  box-shadow: 0 14px 28px rgba(201, 185, 155, 0.45);
+}
+
+.lavender-secondary-btn {
+  @apply font-medium rounded-full px-5 py-2 transition border;
+  color: var(--cream-text);
+  border-color: rgba(212, 197, 169, 0.3);
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.lavender-secondary-btn:hover {
+  border-color: rgba(212, 197, 169, 0.6);
+  box-shadow: 0 10px 25px rgba(212, 197, 169, 0.2);
+}
+
