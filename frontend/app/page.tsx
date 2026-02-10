@@ -161,16 +161,14 @@ export default function Home() {
           </div>
           <div ref={menuButtonRef} className="relative">
             <CollapsibleButtonMenu label="Menu">
-              {isUserControlled && (
-                <button
-                  onClick={() => {
-                    setIsMemoryPanelOpen(!isMemoryPanelOpen);
-                  }}
-                  className="px-4 py-2 text-left hover:bg-gray-100 transition-colors text-sm"
-                >
-                  Memory {memoryCandidates.length > 0 && `(${memoryCandidates.length})`}
-                </button>
-              )}
+              <button
+                onClick={() => {
+                  setIsMemoryPanelOpen(!isMemoryPanelOpen);
+                }}
+                className="px-4 py-2 text-left hover:bg-gray-100 transition-colors text-sm"
+              >
+                Memory {memoryCandidates.length > 0 && `(${memoryCandidates.length})`}
+              </button>
               <button
                 onClick={() => router.push(`/survey?session_id=${sessionId}&type=mid_checkpoint`)}
                 className="px-4 py-2 text-left hover:bg-gray-100 transition-colors text-sm"
