@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Qualtrics Iframe Test</title>
+    <style>
+        body { 
+            margin: 20px; 
+            font-family: Arial, sans-serif; 
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; }
+        #iframe-container { 
+            width: 100%; 
+            height: 600px; 
+            border: 2px solid #d4c5a9; 
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        iframe { 
+            width: 100%; 
+            height: 100%; 
+            border: none; 
+        }
+        #messages {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 4px;
+            min-height: 100px;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        .message {
+            padding: 8px;
+            margin: 5px 0;
+            background: white;
+            border-left: 3px solid #d4c5a9;
+            border-radius: 2px;
+        }
+        .success {
+            background: #d4edda;
+            border-left-color: #28a745;
+            color: #155724;
+            font-weight: bold;
+        }
+        .info {
+            color: #666;
+            font-size: 0.9em;
+        }
+        .controls {
+            display: flex;
+            gap: 8px;
+            margin: 12px 0;
+        }
+        .controls button {
+            border: 1px solid #d4c5a9;
+            background: #fff;
+            border-radius: 6px;
+            padding: 8px 12px;
+            cursor: pointer;
+        }
+        .controls button.active {
+            background: #d4c5a9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Qualtrics Iframe Simulation</h1>
+        <p class="info">This simulates how the chatbot will appear in a Qualtrics survey.</p>
+        <div class="controls">
+            <button data-mode="single" class="active">Single-Block Mode (All Phases)</button>
+            <button data-mode="phase1">Legacy: Phase 1</button>
+            <button data-mode="phase2">Legacy: Phase 2</button>
+            <button data-mode="phase3">Legacy: Phase 3</button>
+        </div>
+        
+        <div id="iframe-container">
+            <iframe 
+                id="chatbot-iframe"
+                src="http://localhost:3000/?response_id=iframe_test_123&return_url=https://example.com"
+                allow="microphone; camera"
+                style="width: 100%; height: 100%; border: none;"
+            ></iframe>
+        </div>
+        
+        <div>
+            <h2>📨 Messages from iframe:</h2>
+            <div id="messages">
+                <p class="info">Waiting for messages from chatbot...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let messageCount = 0;
+        const iframe = document.getElementById('chatbot-iframe');
+        const buttons = Array.from(document.querySelectorAll('[data-mode]'));
+
+        function loadMode(mode) {
+            let url = 'http://localhost:3000/?response_id=iframe_test_123&return_url=https://example.com';
+            if (mode === 'phase1') {
+                url += '&phase=1';
+            } else if (mode === 'phase2') {
+                url += '&phase=2';
+            } else if (mode === 'phase3') {
+                url += '&phase=3';
+            }
+            // Single-block mode: no phase parameter
+            iframe.src = url;
+            buttons.forEach((btn) => {
+                btn.classList.toggle('active', btn.getAttribute('data-mode') === mode);
+            });
+        }
+
+        buttons.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const mode = btn.getAttribute('data-mode');
+                loadMode(mode);
+            });
+        });
+        
+        window.addEventListener('message', function(event) {
+            // In production, verify event.origin for security
+            // For testing, we'll log all messages
+            console.log('Received message:', event.data);
+            console.log('From origin:', event.origin);
+            
+            messageCount++;
+            const messagesDiv = document.getElementById('messages');
+            
+            // Clear "waiting" message on first message
+            if (messageCount === 1) {
+                messagesDiv.innerHTML = '';
+            }
+            
+            const message = document.createElement('div');
+            message.className = 'message';
+            
+            if (event.data.action === 'finish') {
+                message.classList.add('success');
+                let avatarInfo = '';
+                if (event.data.agent_name || event.data.agent_symbol || event.data.agent_color) {
+                    avatarInfo = `<br><strong>Avatar Data:</strong><br>
+                        Name: ${event.data.agent_name || 'N/A'}<br>
+                        Symbol: ${event.data.agent_symbol || 'N/A'}<br>
+                        Color: ${event.data.agent_color || 'N/A'}`;
+                }
+                message.innerHTML = `
+                    <strong>✅ Conversation Finished!</strong><br>
+                    Qualtrics ID: ${event.data.qualtrics_id || 'N/A'}<br>
+                    Phase: ${event.data.phase || 'N/A'}<br>
+                    ${avatarInfo}
+                    <br><em>In a real Qualtrics survey, this would advance to the next block.</em>
+                `;
+            } else {
+                message.innerHTML = `
+                    <strong>Message #${messageCount}:</strong><br>
+                    ${JSON.stringify(event.data, null, 2)}
+                `;
+            }
+            
+            messagesDiv.appendChild(message);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        });
+        
+        // Log when iframe loads
+        iframe.addEventListener('load', function() {
+            console.log('Chatbot iframe loaded successfully');
+            const messagesDiv = document.getElementById('messages');
+            if (messagesDiv.children.length === 1 && messagesDiv.children[0].textContent.includes('Waiting')) {
+                messagesDiv.innerHTML = '<p class="info">✅ Iframe loaded. Chat with the bot and click "Finish Conversation" to see messages here.</p>';
+            }
+        });
+    </script>
+</body>
+</html>

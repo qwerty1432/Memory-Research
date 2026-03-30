@@ -15,13 +15,42 @@ app = FastAPI(
 )
 
 # CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # Frontend URL
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Allow Qualtrics domains and tunneling services for iframe embedding
+import os
+environment = os.getenv("ENVIRONMENT", "development")
+
+# Base allowed origins
+allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+# In development, allow all origins for testing with ngrok and other tunneling services
+# In production, you should specify exact Qualtrics survey URLs
+if environment == "development":
+    # Allow all origins in development (for testing with ngrok, etc.)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"https?://.*",  # Allow all HTTP/HTTPS origins in development
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    # In production, add specific Qualtrics survey URLs
+    # You can add them via environment variable ALLOWED_ORIGINS (comma-separated)
+    production_origins = allowed_origins.copy()
+    allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+    if allowed_origins_env:
+        production_origins.extend([origin.strip() for origin in allowed_origins_env.split(",")])
+    
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=production_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Include routers
 app.include_router(auth.router)

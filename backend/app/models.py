@@ -13,6 +13,7 @@ class User(Base):
     username = Column(String(50), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     condition_id = Column(String(50), nullable=False)  # SESSION_AUTO, SESSION_USER, PERSISTENT_AUTO, PERSISTENT_USER
+    qualtrics_id = Column(String(255), unique=True, nullable=True, index=True)  # Qualtrics Response ID for Qualtrics participants
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

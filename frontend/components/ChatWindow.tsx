@@ -3,33 +3,48 @@
 import { useState, useRef, useEffect } from 'react';
 import { Message } from '@/lib/api';
 import { chatAPI, memoryAPI } from '@/lib/api';
+import AiAvatar, { AssistantAvatarSettings } from '@/components/AiAvatar';
 
 interface ChatWindowProps {
   userId: string;
   sessionId: string;
   conditionId: string;
+  phase?: number | null;
   messages: Message[];
   onNewMessage: (message: Message) => void;
   onNewCandidates: (candidates: any[]) => void;
   onManualMemoryAdded: () => void;
+  onPhaseStatusUpdate?: (status: {
+    phase: number;
+    prompts_answered: number;
+    total_prompts: number;
+    phase_complete: boolean;
+    // Present once the entire 3-phase study is complete in single-block mode.
+    study_complete?: boolean;
+  } | null) => void;
   chatInputRef?: React.RefObject<HTMLInputElement>;
+  assistantAvatar?: AssistantAvatarSettings;
 }
 
 export default function ChatWindow({
   userId,
   sessionId,
   conditionId,
+  phase,
   messages,
   onNewMessage,
   onNewCandidates,
   onManualMemoryAdded,
+  onPhaseStatusUpdate,
   chatInputRef,
+  assistantAvatar,
 }: ChatWindowProps) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [savingMessageIndex, setSavingMessageIndex] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const internalInputRef = useRef<HTMLInputElement>(null);
+  const lastMessageCountRef = useRef<number>(messages.length);
   
   // Use provided ref or internal ref
   const inputRef = chatInputRef || internalInputRef;
@@ -39,8 +54,12 @@ export default function ChatWindow({
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    // Only auto-scroll when a new message is appended.
+    if (messages.length > lastMessageCountRef.current) {
+      scrollToBottom();
+    }
+    lastMessageCountRef.current = messages.length;
+  }, [messages.length]);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,7 +78,7 @@ export default function ChatWindow({
     setLoading(true);
 
     try {
-      const response = await chatAPI.send(userId, sessionId, input);
+      const response = await chatAPI.send(userId, sessionId, input, phase ?? null);
       
       const assistantMessage: Message = {
         msg_id: '',
@@ -73,6 +92,9 @@ export default function ChatWindow({
       
       if (response.memory_candidates && response.memory_candidates.length > 0) {
         onNewCandidates(response.memory_candidates);
+      }
+      if (onPhaseStatusUpdate) {
+        onPhaseStatusUpdate(response.phase_status ?? null);
       }
     } catch (error) {
       console.error('Error sending message:', error);
@@ -109,6 +131,7 @@ export default function ChatWindow({
   };
 
   const isUserControlled = conditionId.includes('USER');
+  const avatar = assistantAvatar ?? { name: 'AI', bgColor: '#d4c5a9', symbol: '🤖' };
 
   return (
     <div className="flex flex-col h-full">
@@ -123,6 +146,14 @@ export default function ChatWindow({
             key={`${msg.msg_id || msg.created_at || idx}-${idx}`}
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} group`}
           >
+            {msg.role !== 'user' && (
+              <div className="mr-3 mt-1 flex flex-col items-center shrink-0">
+                <AiAvatar settings={avatar} />
+                <div className="text-[11px] text-gray-600 mt-1 max-w-[72px] truncate">
+                  {avatar.name || 'AI'}
+                </div>
+              </div>
+            )}
             <div
               className={`relative max-w-xl px-5 py-3 rounded-3xl shadow-sm ${
                 msg.role === 'user'
@@ -150,6 +181,9 @@ export default function ChatWindow({
         ))}
         {loading && (
           <div className="flex justify-start">
+            <div className="mr-3 mt-1 flex flex-col items-center shrink-0">
+              <AiAvatar settings={avatar} />
+            </div>
             <div className="glass-card px-4 py-2 rounded-3xl text-[#1a1a1a]">
               <p className="text-sm">Thinking...</p>
             </div>
@@ -158,7 +192,10 @@ export default function ChatWindow({
         <div ref={messagesEndRef} />
       </div>
 
-      <form onSubmit={handleSend} className="border-t border-white/40 bg-white/60 backdrop-blur-xl p-4 rounded-t-3xl">
+      <form
+        onSubmit={handleSend}
+        className="border-t border-white/40 bg-white/60 backdrop-blur-xl pt-4 px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] rounded-t-3xl"
+      >
         <div className="flex gap-3 items-center">
           <input
             ref={inputRef}

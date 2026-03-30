@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Memory, memoryAPI } from '@/lib/api';
+import { getConditionDisclaimer } from '@/lib/conditionDisclaimer';
 
 interface MemoryReviewPanelProps {
   userId: string;
@@ -29,6 +30,7 @@ export default function MemoryReviewPanel({
   const [loading, setLoading] = useState(false);
 
   const isUserControlled = conditionId.includes('USER');
+  const memoryDisclaimer = getConditionDisclaimer(conditionId);
 
   useEffect(() => {
     if (isOpen) {
@@ -69,11 +71,13 @@ export default function MemoryReviewPanel({
   };
 
   const handleEdit = (memory: Memory) => {
+    if (!isUserControlled) return;
     setEditingId(memory.memory_id);
     setEditText(memory.text);
   };
 
   const handleSaveEdit = async (memoryId: string) => {
+    if (!isUserControlled) return;
     try {
       await memoryAPI.update(memoryId, editText);
       await loadMemories();
@@ -85,6 +89,7 @@ export default function MemoryReviewPanel({
   };
 
   const handleDelete = async (memoryId: string) => {
+    if (!isUserControlled) return;
     if (!confirm('Are you sure you want to delete this memory?')) return;
     try {
       await memoryAPI.delete(memoryId);
@@ -123,6 +128,7 @@ export default function MemoryReviewPanel({
 
   const candidatesToShow = memories.filter((m) => !m.is_active);
   const approvedMemories = memories.filter((m) => m.is_active);
+  const readOnlyMemories = memories;
 
   return (
     <div className="fixed right-0 top-0 h-full w-[28rem] bg-white/80 backdrop-blur-xl border-l border-white/50 z-50 flex flex-col shadow-2xl">
@@ -130,6 +136,7 @@ export default function MemoryReviewPanel({
         <div>
           <h2 className="text-lg font-semibold text-[#1a1a1a]">Memory Review</h2>
           <p className="text-xs text-[#6c4c99]">Approve or edit what the assistant remembers.</p>
+          <p className="text-xs text-gray-600 mt-1">{memoryDisclaimer}</p>
         </div>
         <button
           onClick={onClose}
@@ -209,7 +216,7 @@ export default function MemoryReviewPanel({
           </div>
         )}
 
-        {approvedMemories.length > 0 && (
+        {isUserControlled && approvedMemories.length > 0 && (
           <div>
             <h3 className="font-medium mb-2 text-[#1a1a1a]">Saved Memories</h3>
             <div className="space-y-2">
@@ -248,20 +255,22 @@ export default function MemoryReviewPanel({
                   ) : (
                     <>
                       <p className="text-sm text-[#1a1a1a]">{memory.text}</p>
-                      <div className="flex gap-4 text-xs">
-                        <button
-                          onClick={() => handleEdit(memory)}
-                          className="text-[#d4c5a9] hover:underline"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDelete(memory.memory_id)}
-                          className="text-red-500 hover:underline"
-                        >
-                          Delete
-                        </button>
-                      </div>
+                      {isUserControlled && (
+                        <div className="flex gap-4 text-xs">
+                          <button
+                            onClick={() => handleEdit(memory)}
+                            className="text-[#d4c5a9] hover:underline"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleDelete(memory.memory_id)}
+                            className="text-red-500 hover:underline"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
@@ -270,7 +279,25 @@ export default function MemoryReviewPanel({
           </div>
         )}
 
-        {candidatesToShow.length === 0 && approvedMemories.length === 0 && (
+        {!isUserControlled && readOnlyMemories.length > 0 && (
+          <div>
+            <h3 className="font-medium mb-2 text-[#1a1a1a]">Memories (Read-Only)</h3>
+            <div className="space-y-2">
+              {readOnlyMemories.map((memory) => (
+                <div
+                  key={memory.memory_id}
+                  className={`glass-card rounded-2xl p-4 ${
+                    memory.is_active ? 'bg-[#f3edff]' : ''
+                  }`}
+                >
+                  <p className="text-sm text-[#1a1a1a]">{memory.text}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {memories.length === 0 && (
           <div className="text-center text-sm mt-8 text-[#7a5bb0]">
             No memories yet. Memories will appear here as you chat.
           </div>

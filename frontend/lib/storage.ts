@@ -28,5 +28,6 @@ export const STORAGE_KEYS = {
   USERNAME: 'username',
   CONDITION_ID: 'condition_id',
   DEVELOPER_MODE: 'developer_mode',
+  ASSISTANT_AVATAR: 'assistant_avatar', // JSON blob
 } as const;
 

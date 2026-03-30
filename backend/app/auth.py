@@ -6,6 +6,7 @@ import uuid
 import hashlib
 import base64
 import bcrypt
+import secrets
 
 
 def _prepare_password(password: str) -> bytes:
@@ -100,4 +101,55 @@ def authenticate_user(db: Session, username: str, password: str) -> User | None:
 def get_user_by_id(db: Session, user_id: uuid.UUID) -> User | None:
     """Get user by ID"""
     return db.query(User).filter(User.user_id == user_id).first()
+
+
+def get_user_by_qualtrics_id(db: Session, qualtrics_id: str) -> User | None:
+    """Get user by Qualtrics ID"""
+    return db.query(User).filter(User.qualtrics_id == qualtrics_id).first()
+
+
+def assign_condition_round_robin(db: Session) -> str:
+    """Assign experimental condition using round-robin rotation"""
+    conditions = ["SESSION_AUTO", "SESSION_USER", "PERSISTENT_AUTO", "PERSISTENT_USER"]
+    
+    # Count existing Qualtrics users to determine next condition
+    qualtrics_user_count = db.query(User).filter(User.qualtrics_id.isnot(None)).count()
+    
+    # Round-robin: cycle through conditions based on count
+    condition_index = qualtrics_user_count % len(conditions)
+    return conditions[condition_index]
+
+
+def create_qualtrics_user(db: Session, qualtrics_id: str, condition_id: str = None) -> User:
+    """Create a new user from Qualtrics ID (no password required)"""
+    # Check if user already exists
+    existing_user = db.query(User).filter(User.qualtrics_id == qualtrics_id).first()
+    if existing_user:
+        raise ValueError(f"User with Qualtrics ID {qualtrics_id} already exists")
+    
+    # Assign condition if not provided (round-robin)
+    if condition_id is None:
+        condition_id = assign_condition_round_robin(db)
+    
+    # Validate condition_id
+    valid_conditions = ["SESSION_AUTO", "SESSION_USER", "PERSISTENT_AUTO", "PERSISTENT_USER"]
+    if condition_id not in valid_conditions:
+        raise ValueError(f"Invalid condition_id. Must be one of: {', '.join(valid_conditions)}")
+    
+    # Generate username and random password (user won't need to login)
+    username = f"qualtrics_{qualtrics_id}"
+    # Generate a secure random password (user won't need to know it)
+    random_password = secrets.token_urlsafe(32)
+    
+    user = User(
+        user_id=uuid.uuid4(),
+        username=username,
+        password_hash=get_password_hash(random_password),
+        condition_id=condition_id,
+        qualtrics_id=qualtrics_id
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
 

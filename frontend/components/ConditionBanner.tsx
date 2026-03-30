@@ -5,10 +5,12 @@ interface ConditionBannerProps {
 }
 
 const CONDITION_MESSAGES: Record<string, string> = {
-  SESSION_AUTO: 'Your conversation will not be saved after this session ends.',
-  SESSION_USER: 'You can review saved memories, but they will be cleared after this session ends.',
-  PERSISTENT_AUTO: 'Your conversation is automatically saved and will persist in future sessions.',
-  PERSISTENT_USER: 'You can choose which information to save, edit, or delete, and it will persist in future sessions.',
+  SESSION_AUTO: 'This companion will only use your memory in this session.',
+  SESSION_USER:
+    'This companion will only use your memory in this session. You can review or alter it in Menu -> Memory.',
+  PERSISTENT_AUTO: 'This companion may use memory from this and future sessions.',
+  PERSISTENT_USER:
+    'This companion may use memory across sessions. You can review or alter it in Menu -> Memory.',
 };
 
 export default function ConditionBanner({ conditionId }: ConditionBannerProps) {

@@ -1,0 +1,134 @@
+#!/bin/sh
+
+## ──────────────────────────────────────────────────────────────────────────
+##  rc.local — AI Companion Research Platform
+##  Manages Next.js frontend (port 42800) + FastAPI backend (port 8000)
+##
+##  Called by the system on server reboot, or manually:
+##    ~/etc/rc.local start | stop | restart | apache-restart | status
+## ──────────────────────────────────────────────────────────────────────────
+
+## Account Settings
+USER=hai-wiki
+HOME=/homes/${USER}
+PATH=${HOME}/local/node/bin:${HOME}/venv/bin:${HOME}/bin:${PATH}
+
+APP_DIR=${HOME}/app
+LOGS_DIR=${HOME}/logs
+RUN_DIR=${HOME}/run
+
+export USER HOME PATH
+
+## ── Helper Functions ───────────────────────────────────────────────────────
+
+start_backend() {
+    if [ -f "${RUN_DIR}/backend.pid" ] && kill -0 "$(cat ${RUN_DIR}/backend.pid)" 2>/dev/null; then
+        echo "Backend already running (PID $(cat ${RUN_DIR}/backend.pid))"
+        return 0
+    fi
+    echo "Starting backend (FastAPI on port 8000)..."
+    cd "${APP_DIR}/backend"
+    nohup ${HOME}/venv/bin/uvicorn app.main:app \
+        --host 127.0.0.1 \
+        --port 8000 \
+        --workers 2 \
+        >> "${LOGS_DIR}/backend.log" 2>&1 &
+    echo $! > "${RUN_DIR}/backend.pid"
+    echo "  Backend started (PID $!)"
+}
+
+start_frontend() {
+    if [ -f "${RUN_DIR}/frontend.pid" ] && kill -0 "$(cat ${RUN_DIR}/frontend.pid)" 2>/dev/null; then
+        echo "Frontend already running (PID $(cat ${RUN_DIR}/frontend.pid))"
+        return 0
+    fi
+    echo "Starting frontend (Next.js on port 42800)..."
+    cd "${APP_DIR}/frontend"
+    NODE_ENV=production nohup ${HOME}/local/node/bin/node node_modules/.bin/next start \
+        -p 42800 \
+        -H 127.0.0.1 \
+        >> "${LOGS_DIR}/frontend.log" 2>&1 &
+    echo $! > "${RUN_DIR}/frontend.pid"
+    echo "  Frontend started (PID $!)"
+}
+
+stop_backend() {
+    if [ -f "${RUN_DIR}/backend.pid" ]; then
+        PID=$(cat "${RUN_DIR}/backend.pid")
+        if kill -0 "${PID}" 2>/dev/null; then
+            echo "Stopping backend (PID ${PID})..."
+            kill "${PID}" 2>/dev/null
+            sleep 2
+            kill -9 "${PID}" 2>/dev/null
+        fi
+        rm -f "${RUN_DIR}/backend.pid"
+    fi
+    # Kill any remaining uvicorn workers owned by this user
+    pkill -u ${USER} -f "uvicorn app.main:app" 2>/dev/null || true
+    echo "  Backend stopped"
+}
+
+stop_frontend() {
+    if [ -f "${RUN_DIR}/frontend.pid" ]; then
+        PID=$(cat "${RUN_DIR}/frontend.pid")
+        if kill -0 "${PID}" 2>/dev/null; then
+            echo "Stopping frontend (PID ${PID})..."
+            kill "${PID}" 2>/dev/null
+            sleep 2
+            kill -9 "${PID}" 2>/dev/null
+        fi
+        rm -f "${RUN_DIR}/frontend.pid"
+    fi
+    pkill -u ${USER} -f "next start" 2>/dev/null || true
+    echo "  Frontend stopped"
+}
+
+show_status() {
+    echo "=== Service Status ==="
+    if [ -f "${RUN_DIR}/backend.pid" ] && kill -0 "$(cat ${RUN_DIR}/backend.pid)" 2>/dev/null; then
+        echo "  Backend:  RUNNING (PID $(cat ${RUN_DIR}/backend.pid))"
+    else
+        echo "  Backend:  STOPPED"
+    fi
+    if [ -f "${RUN_DIR}/frontend.pid" ] && kill -0 "$(cat ${RUN_DIR}/frontend.pid)" 2>/dev/null; then
+        echo "  Frontend: RUNNING (PID $(cat ${RUN_DIR}/frontend.pid))"
+    else
+        echo "  Frontend: STOPPED"
+    fi
+    echo ""
+    echo "  Logs: tail -f ${LOGS_DIR}/backend.log"
+    echo "        tail -f ${LOGS_DIR}/frontend.log"
+}
+
+## ── Main ───────────────────────────────────────────────────────────────────
+
+case "$1" in
+    start)
+        mkdir -p "${LOGS_DIR}" "${RUN_DIR}"
+        start_backend
+        sleep 2
+        start_frontend
+        ;;
+    stop)
+        stop_frontend
+        stop_backend
+        ;;
+    restart|apache-restart)
+        stop_frontend
+        stop_backend
+        sleep 2
+        mkdir -p "${LOGS_DIR}" "${RUN_DIR}"
+        start_backend
+        sleep 2
+        start_frontend
+        ;;
+    status)
+        show_status
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+
+exit 0

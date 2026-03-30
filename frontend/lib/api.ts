@@ -1,6 +1,9 @@
 import axios from 'axios';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Use Next.js proxy when in browser (for ngrok tunneling), direct URL for SSR
+const API_URL = typeof window !== 'undefined' 
+  ? '/api'  // Use Next.js rewrite proxy when in browser
+  : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'); // Direct URL for server-side rendering
 
 const api = axios.create({
   baseURL: API_URL,
@@ -30,6 +33,27 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   created_at: string;
+}
+
+export interface PhaseStatus {
+  phase: number;
+  prompts_answered: number;
+  total_prompts: number;
+  phase_complete: boolean;
+  study_complete?: boolean;
+  current_prompt_index?: number;
+  followups_used_for_prompt?: number;
+}
+
+export interface AdvancePhaseResponse {
+  phase_status: PhaseStatus;
+  opening_message: string;
+}
+
+export interface ChatResponse {
+  response: string;
+  memory_candidates: Memory[];
+  phase_status?: PhaseStatus | null;
 }
 
 export interface Memory {
@@ -70,6 +94,15 @@ export const authAPI = {
     const response = await api.get(`/auth/user/${userId}`);
     return response.data;
   },
+
+  qualtricsAuthenticate: async (qualtricsId: string, responseId?: string, phase?: number | null) => {
+    const response = await api.post('/auth/qualtrics/authenticate', {
+      qualtrics_id: qualtricsId,
+      response_id: responseId ?? null,
+      phase: phase ?? null,
+    });
+    return response.data;
+  },
 };
 
 // Session API
@@ -104,11 +137,34 @@ export const sessionAPI = {
 
 // Chat API
 export const chatAPI = {
-  send: async (userId: string, sessionId: string, message: string) => {
+  send: async (
+    userId: string,
+    sessionId: string,
+    message: string,
+    phase?: number | null,
+  ): Promise<ChatResponse> => {
     const response = await api.post('/chat', {
       user_id: userId,
       session_id: sessionId,
       message,
+      phase: phase ?? null,
+    });
+    return response.data;
+  },
+
+  // Single-block mode helper: fetch persisted phase study status on page load.
+  getProgress: async (userId: string, sessionId: string): Promise<PhaseStatus> => {
+    const response = await api.get('/chat/progress', {
+      params: { user_id: userId, session_id: sessionId },
+    });
+    return response.data;
+  },
+
+  // Single-block mode helper: advance phase after phase_complete=true.
+  advancePhase: async (userId: string, sessionId: string): Promise<AdvancePhaseResponse> => {
+    const response = await api.post('/chat/advance', {
+      user_id: userId,
+      session_id: sessionId,
     });
     return response.data;
   },
@@ -172,7 +228,6 @@ export const conditionAPI = {
     return response.data;
   },
 };
-
 
 // Survey API
 export interface SurveyQuestion {

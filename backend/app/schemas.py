@@ -25,6 +25,23 @@ class UserResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class QualtricsAuthenticateRequest(BaseModel):
+    qualtrics_id: str = Field(..., min_length=1, max_length=255)
+    # Preferred name going forward (Qualtrics ResponseID). We still accept `qualtrics_id`
+    # for backwards compatibility with existing iframe URLs/tests.
+    response_id: Optional[str] = Field(None, min_length=1, max_length=255)
+    phase: Optional[int] = Field(None, ge=1, le=3)
+
+
+class QualtricsAuthenticateResponse(BaseModel):
+    user_id: UUID
+    session_id: UUID
+    condition_id: str
+    username: str
+    phase: Optional[int] = None
+    resumed_session: bool = False
+
+
 # Session schemas
 class SessionCreate(BaseModel):
     user_id: UUID
@@ -86,11 +103,33 @@ class ChatRequest(BaseModel):
     user_id: UUID
     session_id: UUID
     message: str
+    phase: Optional[int] = Field(None, ge=1, le=3)
+
+
+class PhaseStatus(BaseModel):
+    phase: int
+    prompts_answered: int
+    total_prompts: int
+    phase_complete: bool
+    study_complete: bool = False
+    current_prompt_index: int = 0
+    followups_used_for_prompt: int = 0
+
+
+class AdvancePhaseRequest(BaseModel):
+    user_id: UUID
+    session_id: UUID
+
+
+class AdvancePhaseResponse(BaseModel):
+    phase_status: PhaseStatus
+    opening_message: str
 
 
 class ChatResponse(BaseModel):
     response: str
     memory_candidates: List[MemoryResponse] = []
+    phase_status: Optional[PhaseStatus] = None
 
 
 # Condition schemas

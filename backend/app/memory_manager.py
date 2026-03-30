@@ -202,7 +202,8 @@ def create_memory_candidate(
     user_id: UUID,
     session_id: Optional[UUID],
     text: str,
-    db: Session
+    db: Session,
+    is_active: bool = False,
 ) -> Memory:
     """Create a new memory candidate (inactive by default)"""
     normalized_user_id = _ensure_uuid(user_id)
@@ -212,7 +213,7 @@ def create_memory_candidate(
         user_id=normalized_user_id,
         session_id=normalized_session_id,
         text=text[:200],  # Enforce 200 char limit
-        is_active=False
+        is_active=is_active
     )
     db.add(memory)
     db.commit()

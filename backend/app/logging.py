@@ -146,3 +146,79 @@ def log_error(db: Session, error_type: str, user_id: Optional[UUID], error_messa
         {"error": error_message}
     )
 
+
+def log_effort_check(
+    db: Session,
+    user_id: UUID,
+    session_id: UUID,
+    *,
+    user_message: str,
+    result: dict
+):
+    """
+    Log effort/relevance assessment for a user message.
+    Stored in `events.payload_json` to avoid schema changes.
+    """
+    payload = {
+        "session_id": str(session_id),
+        "user_message": user_message[:500],
+        "result": result,
+    }
+    log_event(db, "effort_check", user_id, payload)
+
+
+def log_progress_update(
+    db: Session,
+    user_id: UUID,
+    session_id: UUID,
+    *,
+    current_phase: int,
+    current_prompt_index: int,
+    followups_used_for_prompt: int,
+    used_followups_for_prompt: list[str] | None = None,
+    phase_complete: bool,
+    study_complete: bool,
+):
+    """
+    Log progress state update for single-block multi-phase flow.
+    Stores: current_phase, current_prompt_index, followups_used_for_prompt, phase_complete, study_complete.
+    """
+    payload = {
+        "session_id": str(session_id),
+        "current_phase": current_phase,
+        "current_prompt_index": current_prompt_index,
+        "followups_used_for_prompt": followups_used_for_prompt,
+        "used_followups_for_prompt": used_followups_for_prompt or [],
+        "phase_complete": phase_complete,
+        "study_complete": study_complete,
+    }
+    log_event(db, "progress_update", user_id, payload)
+
+
+def get_latest_progress(
+    db: Session,
+    user_id: UUID,
+    session_id: UUID,
+) -> dict | None:
+    """
+    Get the latest progress state for a session.
+    Returns dict with: current_phase, current_prompt_index, followups_used_for_prompt, phase_complete, study_complete.
+    Returns None if no progress found.
+    """
+    events = (
+        db.query(Event)
+        .filter(
+            Event.user_id == user_id,
+            Event.type == "progress_update",
+        )
+        .order_by(Event.created_at.desc())
+        .all()
+    )
+    target_session_id = str(session_id)
+    for event in events:
+        payload = event.payload_json or {}
+        if str(payload.get("session_id")) != target_session_id:
+            continue
+        return payload
+    return None
+

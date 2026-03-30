@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { storage, STORAGE_KEYS } from '@/lib/storage';
 import CheckpointSurvey from '@/components/CheckpointSurvey';
 import { sessionAPI } from '@/lib/api';
 
-export default function SurveyPage() {
+function SurveyClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [userId, setUserId] = useState<string | null>(null);
@@ -67,5 +67,20 @@ export default function SurveyPage() {
       surveyType={surveyType}
       onComplete={handleSurveyComplete}
     />
+  );
+}
+
+export default function SurveyPage() {
+  // Next.js app router requires a Suspense boundary for `useSearchParams`.
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center min-h-screen">
+          <p>Loading...</p>
+        </div>
+      }
+    >
+      <SurveyClient />
+    </Suspense>
   );
 }

@@ -132,6 +132,9 @@ Copy `backend/.env.example` to `backend/.env` and configure:
 | `GENAI_API_KEY` | Purdue GenAI API key. Get from https://genai.rcac.purdue.edu | **Yes** | - |
 | `SECRET_KEY` | Secret key for session management. Generate a random string for production | No | - |
 | `ENVIRONMENT` | Environment mode: `development` or `production` | No | `development` |
+| `CHAT_TONE` | Chat tone/persona: `extroverted` or `neutral` | No | `extroverted` |
+| `EFFORT_CHECK_ENABLED` | Enable effort/relevance checks that may trigger follow-up questions | No | `true` |
+| `EFFORT_MIN_WORDS` | Minimum words before we consider a reply “too short” (heuristic) | No | `6` |
 
 **Example `.env` file:**
 ```bash
@@ -139,6 +142,9 @@ DATABASE_URL=sqlite:///./memory_research.db
 GENAI_API_KEY=sk-your-api-key-here
 SECRET_KEY=your-secret-key-here
 ENVIRONMENT=development
+CHAT_TONE=extroverted
+EFFORT_CHECK_ENABLED=true
+EFFORT_MIN_WORDS=6
 ```
 
 ### Frontend (.env.local)
@@ -359,6 +365,107 @@ This is a research project. For questions or contributions, please contact the r
 ## Documentation
 
 - **[Research Readiness Checklist](RESEARCH_READINESS.md)** - Complete list of remaining tasks and open questions for research readiness
+
+## Qualtrics Integration
+
+The chatbot can be embedded in Qualtrics surveys as an iframe. Participants are automatically authenticated using their Qualtrics Response ID (no login required).
+
+### Local Testing with Tunneling
+
+For local testing before deployment, use a tunneling service (e.g., ngrok) to expose your **frontend** to the internet. The Next.js app proxies API requests to your local backend via `/api/*`, so you typically only need **one tunnel** (frontend).
+
+1. **Install ngrok**: Download from https://ngrok.com/download
+
+2. **Start your services**:
+   ```bash
+   # Terminal 1: Backend
+   cd backend
+   source venv/bin/activate
+   uvicorn app.main:app --reload --port 8000
+   
+   # Terminal 2: Frontend
+   cd frontend
+   npm run dev
+   ```
+
+3. **Create a tunnel (frontend)**:
+   ```bash
+   ngrok http 3000
+   # Note the HTTPS URL (e.g., https://xyz789.ngrok-free.dev)
+   ```
+
+4. **Test the integration**:
+   - Access frontend via ngrok URL: `https://your-frontend-ngrok-url.ngrok-free.dev`
+   - Test with mock Qualtrics parameters (preferred): `?response_id=test123&return_url=https://example.com`
+   - (Legacy param still supported): `?qualtrics_id=test123&return_url=https://example.com`
+   - Verify automatic authentication works (no login screen)
+   - Test "Finish Conversation" button
+
+### Qualtrics Survey Configuration
+
+Add this HTML/JavaScript to your Qualtrics survey:
+
+```html
+<div id="chatbot-container" style="width: 100%; height: 80vh; min-height: 600px;">
+  <iframe 
+    id="chatbot-iframe"
+    src="https://your-domain.com/?response_id=${e://Field/ResponseID}&return_url=${e://Field/ReturnURL}"
+    style="width: 100%; height: 100%; border: none;"
+    allow="microphone; camera"
+  ></iframe>
+</div>
+
+<script>
+  window.addEventListener('message', function(event) {
+    // Verify origin for security (update with your domain)
+    if (event.origin !== 'https://your-domain.com') {
+      return;
+    }
+    
+    if (event.data.action === 'finish') {
+      // Mark chatbot as completed
+      Qualtrics.SurveyEngine.setEmbeddedData('chatbot_completed', 'true');
+      Qualtrics.SurveyEngine.setEmbeddedData('chatbot_qualtrics_id', event.data.qualtrics_id);
+      
+      // Advance to next survey block
+      this.clickNextButton();
+    }
+  });
+</script>
+```
+
+**Replace `https://your-domain.com` with your actual chatbot URL** (ngrok URL for testing, production URL for deployment).
+
+### How It Works
+
+1. **Automatic Authentication**: When a participant accesses the chatbot via Qualtrics iframe, the `response_id` parameter (Qualtrics ResponseID) is used to automatically create or authenticate the user (no password required).
+   - Preferred param name: `response_id` (Qualtrics ResponseID)
+   - Legacy param name still accepted: `qualtrics_id`
+
+2. **Condition Assignment**: Experimental conditions are assigned using round-robin rotation for balanced distribution.
+
+3. **Session Management**: Each Qualtrics interaction creates a new session, allowing tracking of multiple interactions if participants return to the chatbot.
+
+4. **Finish Conversation**: Participants click "Finish Conversation" when done, which sends a message to the Qualtrics parent window to advance to the next survey block.
+
+5. **Research Logging**: Key study signals are logged in the `events` table (e.g., `qualtrics_authenticated`, `effort_check`, message sent/received).
+
+### Participant UX Notes (Study)
+
+- **Avatar customization**: Participants can open `Menu → Avatar` to set the AI’s display name, icon color, and symbol. This changes the icon shown next to **assistant** messages.
+- **Extroverted tone**: Controlled via backend env var `CHAT_TONE`.
+- **Effort/relevance checks**: Controlled via backend env vars `EFFORT_CHECK_ENABLED` and `EFFORT_MIN_WORDS`. When enabled, the bot may ask a brief follow-up question if the response is too short/off-topic.
+- **Bot-checking**: Deferred (out of scope for the first deployed version).
+
+### Production Deployment
+
+For production deployment:
+
+1. Deploy backend and frontend to a server with HTTPS
+2. Update CORS configuration in `backend/app/main.py` to include specific Qualtrics survey URLs
+3. Update `frontend/.env.local` with production backend URL
+4. Update Qualtrics embed code with production frontend URL
+5. Test with actual Qualtrics survey in test mode before going live
 
 ## License
 
