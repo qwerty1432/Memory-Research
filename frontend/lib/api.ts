@@ -1,9 +1,9 @@
 import axios from 'axios';
 
-// Use Next.js proxy when in browser (for ngrok tunneling), direct URL for SSR
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
 const API_URL = typeof window !== 'undefined' 
-  ? '/api'  // Use Next.js rewrite proxy when in browser
-  : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'); // Direct URL for server-side rendering
+  ? `${basePath}/api`
+  : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
 
 const api = axios.create({
   baseURL: API_URL,

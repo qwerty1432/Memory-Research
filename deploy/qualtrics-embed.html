@@ -1,0 +1,80 @@
+<!--
+  ============================================================================
+  AI Companion Chatbot — Qualtrics Embed Code
+  ============================================================================
+
+  HOW TO USE IN QUALTRICS:
+  1. In your survey, add a "Text/Graphic" question (or use an existing one)
+  2. Click the question text area, then click "HTML View" (</> icon)
+  3. Paste this ENTIRE block into the HTML editor
+  4. Save
+
+  WHAT THIS DOES:
+  - Embeds the AI chatbot in a full-height iframe
+  - Passes the Qualtrics ResponseID to the chatbot for participant tracking
+  - Listens for the chatbot's "finish" postMessage and auto-advances the survey
+  - Stores avatar data (name, symbol, color) as embedded data for analysis
+
+  PREREQUISITES:
+  - In Survey Flow, add Embedded Data fields BEFORE the block containing this
+    question. Add these field names (leave values blank — they'll be set by JS):
+      • chatbot_agent_name
+      • chatbot_agent_symbol
+      • chatbot_agent_color
+    This lets you capture what avatar the participant chose for analysis.
+
+  ============================================================================
+-->
+
+<!-- Chatbot iframe — fills the Qualtrics question area -->
+<div id="chatbot-container" style="width:100%; height:80vh; min-height:600px; position:relative;">
+  <iframe
+    id="chatbot-iframe"
+    src="https://hai.cs.purdue.edu/study/memory-chatbot/?response_id=${e://Field/ResponseID}"
+    style="width:100%; height:100%; border:none; border-radius:8px;"
+    allow="clipboard-write"
+  ></iframe>
+</div>
+
+<!-- Hide the Next button until the chatbot signals completion -->
+<style>
+  #NextButton { display: none !important; }
+  .chatbot-done #NextButton { display: inline-block !important; }
+</style>
+
+<script>
+  Qualtrics.SurveyEngine.addOnReady(function() {
+    var that = this;
+
+    // Listen for "finish" message from the chatbot iframe
+    window.addEventListener("message", function(event) {
+      // Only accept messages from our chatbot domain
+      if (event.origin !== "https://hai.cs.purdue.edu") return;
+
+      var data = event.data;
+      if (!data || data.action !== "finish") return;
+
+      console.log("Chatbot finish signal received:", data);
+
+      // Store avatar data as Qualtrics embedded data (for analysis)
+      if (data.agent_name) {
+        Qualtrics.SurveyEngine.setEmbeddedData("chatbot_agent_name", data.agent_name);
+      }
+      if (data.agent_symbol) {
+        Qualtrics.SurveyEngine.setEmbeddedData("chatbot_agent_symbol", data.agent_symbol);
+      }
+      if (data.agent_color) {
+        Qualtrics.SurveyEngine.setEmbeddedData("chatbot_agent_color", data.agent_color);
+      }
+
+      // Show the Next button so the participant can proceed
+      document.body.classList.add("chatbot-done");
+
+      // Optional: auto-click Next after a short delay
+      // Uncomment the lines below if you want auto-advance:
+      // setTimeout(function() {
+      //   that.clickNextButton();
+      // }, 1500);
+    });
+  });
+</script>

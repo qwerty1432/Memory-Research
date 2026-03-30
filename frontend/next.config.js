@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  basePath: process.env.NEXT_PUBLIC_BASE_PATH || '',
   async headers() {
     return [
       {
@@ -18,7 +19,7 @@ const nextConfig = {
     return [
       {
         source: '/api/:path*',
-        destination: 'http://localhost:8000/:path*', // Proxy backend API requests
+        destination: 'http://localhost:8000/:path*',
       },
     ];
   },

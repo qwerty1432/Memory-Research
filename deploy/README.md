@@ -158,19 +158,10 @@ Logs can grow over time. To clear them:
 
 ## Qualtrics iframe Update
 
-In the Qualtrics survey builder, update the iframe embed code:
+In the Qualtrics survey builder, update the iframe embed code to point at the
+production subpath `https://hai.cs.purdue.edu/study/memory-chatbot/`.
 
-**Old (ngrok):**
-```html
-<iframe src="https://XXXX.ngrok-free.app/?qualtrics_id=${e://Field/ResponseID}&condition=..." ...>
-```
-
-**New (production):**
-```html
-<iframe src="https://hai.cs.purdue.edu/?qualtrics_id=${e://Field/ResponseID}&condition=..." ...>
-```
-
-Only the hostname changes — all query parameters stay the same.
+See full embed HTML in `deploy/qualtrics-embed.html`.
 
 ## Directory Layout on Server
 

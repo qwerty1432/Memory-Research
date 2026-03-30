@@ -101,6 +101,7 @@ if [ ! -f "${APP_DIR}/frontend/.env.local" ]; then
     cat > "${APP_DIR}/frontend/.env.local" << ENVEOF
 NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 NEXT_PUBLIC_ENVIRONMENT=production
+NEXT_PUBLIC_BASE_PATH=/study/memory-chatbot
 ENVEOF
     echo "  Created frontend/.env.local"
 else
