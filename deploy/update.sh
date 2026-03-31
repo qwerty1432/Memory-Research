@@ -79,7 +79,7 @@ if curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1; then
 else
     echo "  Backend:  FAILED — check ~/logs/backend.log"
 fi
-if curl -sf http://127.0.0.1:42800 > /dev/null 2>&1; then
+if curl -sf http://127.0.0.1:42800/study/memory-chatbot/ > /dev/null 2>&1; then
     echo "  Frontend: OK"
 else
     echo "  Frontend: FAILED — check ~/logs/frontend.log"

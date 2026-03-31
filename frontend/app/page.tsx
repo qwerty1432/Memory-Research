@@ -448,7 +448,7 @@ export default function Home() {
               userId={userId}
               sessionId={sessionId}
               conditionId={conditionId}
-              phase={currentPhase}
+              phase={isQualtrics ? null : currentPhase}
               messages={messages}
               onNewMessage={handleNewMessage}
               onNewCandidates={handleNewCandidates}

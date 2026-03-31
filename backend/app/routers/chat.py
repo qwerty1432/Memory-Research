@@ -377,18 +377,16 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db)):
                     phase=3,  # Final phase
                 )
             elif phase_complete and current_phase < 3:
-                # Phase complete: stop and wait for UI "Continue" to advance phases.
                 messages = [
                     {
                         "role": "system",
                         "content": (
-                            "You are a warm, extroverted research chat companion.\n"
-                            f"Phase {current_phase} is complete.\n"
+                            "You are a warm, friendly conversation partner.\n"
+                            f"You've just finished chatting through all the topics in this set.\n"
                             "Respond by:\n"
-                            "1) Briefly acknowledging the user's last message.\n"
-                            "2) Congratulating them for completing the phase.\n"
-                            "3) Clearly telling them to click the 'Continue' button below to start the next phase.\n"
-                            "Do not ask any new required interview question."
+                            "1) Reacting genuinely to what they just shared.\n"
+                            "2) Letting them know they did great and can click the 'Continue' button below whenever they're ready for the next set of topics.\n"
+                            "Keep it brief, warm, and natural. Do not ask any new question."
                         ),
                     },
                     {"role": "system", "content": f"Context from previous conversations:\n{context}"} if context.strip() else None,

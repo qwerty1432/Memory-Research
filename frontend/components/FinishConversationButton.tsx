@@ -123,12 +123,12 @@ export default function FinishConversationButton({
       </button>
       {showSuccess && (
         <p className="mt-2 text-sm text-green-600 text-center">
-          Finish message sent! Check browser console (F12) to see the postMessage.
+          Done! You'll be redirected to the next part of the survey shortly.
         </p>
       )}
       {disabled && !showSuccess && (
         <p className="mt-2 text-sm text-amber-700 text-center">
-          Please complete all phases before finishing.
+          Keep chatting! This will unlock once we've covered all the topics in this set.
         </p>
       )}
     </div>
