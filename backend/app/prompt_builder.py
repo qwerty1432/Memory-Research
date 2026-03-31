@@ -247,7 +247,16 @@ Rules for followup_question (when needs_followup is true):
         {"role": "user", "content": prompt},
     ]
 
-    raw = await call_genai(messages, stream=False, temperature=0.0, max_tokens=180)
+    try:
+        raw = await call_genai(messages, stream=False, temperature=0.0, max_tokens=180)
+    except Exception:
+        return {
+            "relevance_score": 2,
+            "effort_score": 2,
+            "needs_followup": False,
+            "followup_question": "",
+            "timeout_fallback": True,
+        }
     raw = (raw or "").strip()
 
     try:

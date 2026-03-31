@@ -54,7 +54,7 @@ async def call_genai(
     if max_tokens:
         body["max_tokens"] = max_tokens
     
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(GENAI_API_URL, headers=headers, json=body)
         
         if response.status_code != 200:
