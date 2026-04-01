@@ -1,6 +1,11 @@
 """
-Purdue GenAI API client for chat completions
+Purdue GenAI API client for chat completions.
+
+Uses sync httpx in a thread pool because httpx.AsyncClient has a known
+DNS/SSL incompatibility with the anyio backend on this server (async
+times out while sync completes in ~2 s).
 """
+import asyncio
 import os
 import httpx
 import json
@@ -19,57 +24,47 @@ def get_api_key() -> str:
     return api_key
 
 
+def _sync_call(headers: dict, body: dict) -> httpx.Response:
+    with httpx.Client(timeout=120.0) as client:
+        return client.post(GENAI_API_URL, headers=headers, json=body)
+
+
 async def call_genai(
     messages: list[dict],
     stream: bool = False,
     temperature: float = 0.7,
     max_tokens: Optional[int] = None
 ) -> str:
-    """
-    Call Purdue GenAI API for chat completion.
-    
-    Args:
-        messages: List of message dicts with 'role' and 'content'
-        stream: Whether to stream the response
-        temperature: Sampling temperature
-        max_tokens: Maximum tokens in response
-    
-    Returns:
-        Full response text (for non-streaming) or empty string (for streaming)
-    """
     api_key = get_api_key()
-    
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
-    
+
     body = {
         "model": GENAI_MODEL,
         "messages": messages,
         "stream": stream,
         "temperature": temperature
     }
-    
+
     if max_tokens:
         body["max_tokens"] = max_tokens
-    
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(GENAI_API_URL, headers=headers, json=body)
-        
-        if response.status_code != 200:
-            raise Exception(f"GenAI API error: {response.status_code}, {response.text}")
-        
-        if stream:
-            # For streaming, return empty string (handled separately)
-            return ""
+
+    response = await asyncio.to_thread(_sync_call, headers, body)
+
+    if response.status_code != 200:
+        raise Exception(f"GenAI API error: {response.status_code}, {response.text}")
+
+    if stream:
+        return ""
+    else:
+        data = response.json()
+        if "choices" in data and len(data["choices"]) > 0:
+            return data["choices"][0]["message"]["content"]
         else:
-            # Parse non-streaming response
-            data = response.json()
-            if "choices" in data and len(data["choices"]) > 0:
-                return data["choices"][0]["message"]["content"]
-            else:
-                raise Exception(f"Unexpected response format: {data}")
+            raise Exception(f"Unexpected response format: {data}")
 
 
 async def stream_genai(
@@ -79,46 +74,48 @@ async def stream_genai(
 ) -> AsyncIterator[str]:
     """
     Stream responses from Purdue GenAI API.
-    
-    Yields:
-        Chunks of text as they arrive
+    Uses sync httpx in a background thread, then yields chunks.
     """
     api_key = get_api_key()
-    
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
-    
+
     body = {
         "model": GENAI_MODEL,
         "messages": messages,
         "stream": True,
         "temperature": temperature
     }
-    
+
     if max_tokens:
         body["max_tokens"] = max_tokens
-    
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream("POST", GENAI_API_URL, headers=headers, json=body) as response:
-            if response.status_code != 200:
-                error_text = await response.aread()
-                raise Exception(f"GenAI API error: {response.status_code}, {error_text.decode()}")
-            
-            async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    data_str = line[6:]  # Remove "data: " prefix
-                    if data_str.strip() == "[DONE]":
-                        break
-                    try:
-                        data = json.loads(data_str)
-                        if "choices" in data and len(data["choices"]) > 0:
-                            delta = data["choices"][0].get("delta", {})
-                            content = delta.get("content", "")
-                            if content:
-                                yield content
-                    except json.JSONDecodeError:
-                        continue
 
+    def _sync_stream():
+        chunks = []
+        with httpx.Client(timeout=120.0) as client:
+            with client.stream("POST", GENAI_API_URL, headers=headers, json=body) as resp:
+                if resp.status_code != 200:
+                    error_text = resp.read()
+                    raise Exception(f"GenAI API error: {resp.status_code}, {error_text.decode()}")
+                for line in resp.iter_lines():
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            if "choices" in data and len(data["choices"]) > 0:
+                                delta = data["choices"][0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    chunks.append(content)
+                        except json.JSONDecodeError:
+                            continue
+        return chunks
 
+    chunks = await asyncio.to_thread(_sync_stream)
+    for chunk in chunks:
+        yield chunk
