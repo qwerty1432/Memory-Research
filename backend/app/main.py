@@ -66,6 +66,21 @@ async def startup_event():
     """Initialize database on startup"""
     init_db()
 
+    # Warm up the GenAI model so the first user request isn't slow
+    import asyncio
+    async def _warmup():
+        try:
+            from .genai_client import call_genai
+            await call_genai(
+                [{"role": "user", "content": "Hi"}],
+                stream=False,
+                max_tokens=5,
+            )
+            print("GenAI warm-up: OK")
+        except Exception as e:
+            print(f"GenAI warm-up: failed ({e}) — first request may be slow")
+    asyncio.create_task(_warmup())
+
 
 @app.get("/")
 def root():

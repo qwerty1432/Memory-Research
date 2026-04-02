@@ -41,6 +41,7 @@ export default function ChatWindow({
 }: ChatWindowProps) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState('');
   const [savingMessageIndex, setSavingMessageIndex] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const internalInputRef = useRef<HTMLInputElement>(null);
@@ -76,39 +77,54 @@ export default function ChatWindow({
     onNewMessage(userMessage);
     setInput('');
     setLoading(true);
+    setLoadingStatus('Thinking...');
 
-    try {
-      const response = await chatAPI.send(userId, sessionId, input, phase ?? null);
-      
-      const assistantMessage: Message = {
-        msg_id: '',
-        session_id: sessionId,
-        role: 'assistant',
-        content: response.response,
-        created_at: new Date().toISOString(),
-      };
+    const MAX_ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        if (attempt > 1) {
+          setLoadingStatus(`Still working on it... (attempt ${attempt}/${MAX_ATTEMPTS})`);
+        }
+        const response = await chatAPI.send(userId, sessionId, input, phase ?? null);
 
-      onNewMessage(assistantMessage);
-      
-      if (response.memory_candidates && response.memory_candidates.length > 0) {
-        onNewCandidates(response.memory_candidates);
+        const assistantMessage: Message = {
+          msg_id: '',
+          session_id: sessionId,
+          role: 'assistant',
+          content: response.response,
+          created_at: new Date().toISOString(),
+        };
+
+        onNewMessage(assistantMessage);
+
+        if (response.memory_candidates && response.memory_candidates.length > 0) {
+          onNewCandidates(response.memory_candidates);
+        }
+        if (onPhaseStatusUpdate) {
+          onPhaseStatusUpdate(response.phase_status ?? null);
+        }
+        setLoading(false);
+        setLoadingStatus('');
+        return;
+      } catch (error: any) {
+        console.error(`Chat attempt ${attempt}/${MAX_ATTEMPTS} failed:`, error);
+        const isTimeout = error?.code === 'ECONNABORTED' || error?.message?.includes('timeout');
+        if (isTimeout && attempt < MAX_ATTEMPTS) {
+          continue;
+        }
+        const errorMessage: Message = {
+          msg_id: '',
+          session_id: sessionId,
+          role: 'assistant',
+          content: 'Sorry, I encountered an error. Please try sending your message again.',
+          created_at: new Date().toISOString(),
+        };
+        onNewMessage(errorMessage);
+        break;
       }
-      if (onPhaseStatusUpdate) {
-        onPhaseStatusUpdate(response.phase_status ?? null);
-      }
-    } catch (error) {
-      console.error('Error sending message:', error);
-      const errorMessage: Message = {
-        msg_id: '',
-        session_id: sessionId,
-        role: 'assistant',
-        content: 'Sorry, I encountered an error. Please try again.',
-        created_at: new Date().toISOString(),
-      };
-      onNewMessage(errorMessage);
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
+    setLoadingStatus('');
   };
 
   const handleSaveToMemory = async (message: Message, index: number) => {
@@ -185,7 +201,7 @@ export default function ChatWindow({
               <AiAvatar settings={avatar} />
             </div>
             <div className="glass-card px-4 py-2 rounded-3xl text-[#1a1a1a]">
-              <p className="text-sm">Thinking...</p>
+              <p className="text-sm">{loadingStatus || 'Thinking...'}</p>
             </div>
           </div>
         )}
