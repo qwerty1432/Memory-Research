@@ -2,6 +2,9 @@
 const nextConfig = {
   reactStrictMode: true,
   basePath: process.env.NEXT_PUBLIC_BASE_PATH || '',
+  experimental: {
+    proxyTimeout: 120_000,
+  },
   async headers() {
     return [
       {

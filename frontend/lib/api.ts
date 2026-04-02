@@ -148,7 +148,7 @@ export const chatAPI = {
       session_id: sessionId,
       message,
       phase: phase ?? null,
-    });
+    }, { timeout: 120000 });
     return response.data;
   },
 

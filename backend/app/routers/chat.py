@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
-from ..database import get_db
+from sqlalchemy.orm import Session as DBSession
+from ..database import get_db, SessionLocal
 from .. import schemas, models, memory_manager, prompt_builder, logging
 from ..models import Message, Session as SessionModel
 from ..genai_client import call_genai, stream_genai
 from uuid import UUID
+import asyncio
 import os
 import json
 from sse_starlette.sse import EventSourceResponse
@@ -18,7 +19,7 @@ QUALTRICS_PHASE_EVENT = "qualtrics_phase_session"
 def get_progress(
     user_id: UUID,
     session_id: UUID,
-    db: Session = Depends(get_db),
+    db: DBSession = Depends(get_db),
 ):
     """
     Return persisted single-block progress for the given session.
@@ -49,7 +50,7 @@ def get_progress(
 @router.post("/advance", response_model=schemas.AdvancePhaseResponse)
 def advance_phase(
     request: schemas.AdvancePhaseRequest,
-    db: Session = Depends(get_db),
+    db: DBSession = Depends(get_db),
 ):
     """
     Single-block mode helper to advance from Phase 1->2 or 2->3 after the phase is complete.
@@ -120,7 +121,7 @@ def advance_phase(
     )
 
 
-def _resolve_session_phase(db: Session, user_id: UUID, session_id: UUID, explicit_phase: int | None) -> int | None:
+def _resolve_session_phase(db: DBSession, user_id: UUID, session_id: UUID, explicit_phase: int | None) -> int | None:
     """Legacy: resolve phase from events. For single-block mode, use _get_progress_state instead."""
     if explicit_phase in (1, 2, 3):
         return explicit_phase
@@ -148,7 +149,7 @@ def _resolve_session_phase(db: Session, user_id: UUID, session_id: UUID, explici
     return None
 
 
-def _get_progress_state(db: Session, user_id: UUID, session_id: UUID) -> dict:
+def _get_progress_state(db: DBSession, user_id: UUID, session_id: UUID) -> dict:
     """
     Get current progress state for single-block mode.
     Returns dict with: current_phase, current_prompt_index, followups_used_for_prompt, used_followups_for_prompt, phase_complete, study_complete.
@@ -176,7 +177,7 @@ def _get_progress_state(db: Session, user_id: UUID, session_id: UUID) -> dict:
 
 
 def _update_progress_state(
-    db: Session,
+    db: DBSession,
     user_id: UUID,
     session_id: UUID,
     *,
@@ -202,7 +203,7 @@ def _update_progress_state(
 
 
 @router.post("", response_model=schemas.ChatResponse)
-async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db)):
+async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
     """Handle chat message and return response"""
     # Verify user exists
     user = db.query(models.User).filter(models.User.user_id == request.user_id).first()
@@ -455,16 +456,13 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db)):
         response_text = followup_override
     else:
         try:
-            response_text = await call_genai(messages, stream=False)
+            response_text = await call_genai(messages, stream=False, max_tokens=400)
         except Exception as e:
-            # Log first attempt error
             error_msg = str(e)
             print(f"GenAI API Error (first attempt): {error_msg}")
             logging.log_error(db, "error_chat_api", request.user_id, f"First attempt: {error_msg}")
-            
-            # Retry once
             try:
-                response_text = await call_genai(messages, stream=False)
+                response_text = await call_genai(messages, stream=False, max_tokens=400)
             except Exception as retry_error:
                 error_msg = str(retry_error)
                 print(f"GenAI API Error (retry): {error_msg}")
@@ -491,52 +489,34 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db)):
     # Log message received
     logging.log_message_received(db, request.user_id, request.session_id, response_text)
     
-    # Extract memory candidates using LLM
-    try:
-        # Get existing memories for deduplication
-        existing_memories = memory_manager.get_all_existing_memories(
-            request.user_id, 
-            request.session_id, 
-            db
-        )
-        
-        # Extract memories from USER MESSAGE ONLY (not assistant response)
-        memory_candidates_text = await prompt_builder.extract_memories_from_conversation(
-            request.message,  # Only user message, no assistant response
-            existing_memories
-        )
-        
-        # Filter out duplicates and create memory candidates
-        memory_candidates = []
-        for candidate_text in memory_candidates_text:
-            # Check if this is a duplicate
-            if not memory_manager.check_memory_duplicate(
-                candidate_text,
-                request.user_id,
-                request.session_id,
-                db
-            ):
-                # Auto conditions immediately activate extracted memories.
-                auto_activate = condition in ["SESSION_AUTO", "PERSISTENT_AUTO"]
-                # Not a duplicate, create the candidate
-                memory = memory_manager.create_memory_candidate(
-                    request.user_id,
-                    request.session_id,
-                    candidate_text,
-                    db,
-                    is_active=auto_activate,
-                )
-                memory_candidates.append(memory)
-                if auto_activate:
-                    logging.log_memory_approved(db, request.user_id, memory.memory_id)
-                else:
-                    logging.log_memory_created(db, request.user_id, memory.memory_id)
-    except Exception as e:
-        # Silently skip memory extraction on error
-        logging.log_error(db, "error_memory_extraction", request.user_id, str(e))
-        memory_candidates = []
-    
-    # Get all inactive memory candidates for this session
+    # Fire-and-forget: extract memories in the background so the user
+    # gets the chat response immediately without waiting for a third LLM call.
+    async def _extract_memories_bg(user_id, session_id, user_msg, cond):
+        bg_db = SessionLocal()
+        try:
+            existing_memories = memory_manager.get_all_existing_memories(user_id, session_id, bg_db)
+            memory_candidates_text = await prompt_builder.extract_memories_from_conversation(
+                user_msg, existing_memories
+            )
+            for candidate_text in memory_candidates_text:
+                if not memory_manager.check_memory_duplicate(candidate_text, user_id, session_id, bg_db):
+                    auto_activate = cond in ["SESSION_AUTO", "PERSISTENT_AUTO"]
+                    mem = memory_manager.create_memory_candidate(
+                        user_id, session_id, candidate_text, bg_db, is_active=auto_activate,
+                    )
+                    if auto_activate:
+                        logging.log_memory_approved(bg_db, user_id, mem.memory_id)
+                    else:
+                        logging.log_memory_created(bg_db, user_id, mem.memory_id)
+        except Exception as e:
+            logging.log_error(bg_db, "error_memory_extraction", user_id, str(e))
+        finally:
+            bg_db.close()
+
+    asyncio.create_task(_extract_memories_bg(
+        request.user_id, request.session_id, request.message, condition,
+    ))
+
     all_candidates = memory_manager.get_memory_candidates(request.user_id, request.session_id, db)
     
     return {
@@ -547,7 +527,7 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/stream")
-async def chat_stream(request: schemas.ChatRequest, db: Session = Depends(get_db)):
+async def chat_stream(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
     """Stream chat response using Server-Sent Events"""
     # Verify user and session
     user = db.query(models.User).filter(models.User.user_id == request.user_id).first()
