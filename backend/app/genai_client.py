@@ -7,6 +7,7 @@ times out while sync completes in ~2 s).
 """
 import asyncio
 import os
+import time
 import httpx
 import json
 from typing import AsyncIterator, Optional
@@ -25,8 +26,16 @@ def get_api_key() -> str:
 
 
 def _sync_call(headers: dict, body: dict) -> httpx.Response:
+    t0 = time.time()
     with httpx.Client(timeout=120.0) as client:
-        return client.post(GENAI_API_URL, headers=headers, json=body)
+        resp = client.post(GENAI_API_URL, headers=headers, json=body)
+    elapsed = time.time() - t0
+    tokens = resp.json().get("usage", {}) if resp.status_code == 200 else {}
+    print(f"[GenAI] {elapsed:.1f}s | status={resp.status_code} | "
+          f"max_tokens={body.get('max_tokens','none')} | "
+          f"prompt_tok={tokens.get('prompt_tokens','?')} "
+          f"comp_tok={tokens.get('completion_tokens','?')}")
+    return resp
 
 
 async def call_genai(

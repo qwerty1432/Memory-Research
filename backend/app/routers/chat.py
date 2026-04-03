@@ -9,6 +9,7 @@ from uuid import UUID
 import asyncio
 import os
 import json
+import time
 from sse_starlette.sse import EventSourceResponse
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -269,9 +270,11 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
             current_required_prompt = phase_prompts[current_prompt_index]
     
     # Evaluate sufficiency and get follow-up override (if needed)
+    t_start = time.time()
     followup_override = None
     effort_result = None
     if is_single_block_mode and not study_complete and current_required_prompt:
+        t_effort = time.time()
         followup_override, effort_result = await prompt_builder.maybe_build_followup_override(
             last_assistant.content if last_assistant else None,
             request.message,
@@ -279,6 +282,7 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
             followups_used_for_prompt=followups_used,
             used_followups_for_prompt=used_followups_for_prompt,
         )
+        print(f"[Chat] effort_check: {time.time()-t_effort:.1f}s | override={'yes' if followup_override else 'no'}")
         if effort_result is not None:
             logging.log_effort_check(
                 db,
@@ -454,18 +458,23 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
     # Call GenAI API (or return follow-up override)
     if followup_override:
         response_text = followup_override
+        print(f"[Chat] response: followup_override (no LLM call)")
     else:
+        t_llm = time.time()
         try:
             response_text = await call_genai(messages, stream=False, max_tokens=400)
+            print(f"[Chat] response: LLM ok in {time.time()-t_llm:.1f}s")
         except Exception as e:
             error_msg = str(e)
-            print(f"GenAI API Error (first attempt): {error_msg}")
+            print(f"[Chat] response: LLM attempt1 FAILED in {time.time()-t_llm:.1f}s — {error_msg}")
             logging.log_error(db, "error_chat_api", request.user_id, f"First attempt: {error_msg}")
+            t_retry = time.time()
             try:
                 response_text = await call_genai(messages, stream=False, max_tokens=400)
+                print(f"[Chat] response: LLM retry ok in {time.time()-t_retry:.1f}s")
             except Exception as retry_error:
                 error_msg = str(retry_error)
-                print(f"GenAI API Error (retry): {error_msg}")
+                print(f"[Chat] response: LLM retry FAILED in {time.time()-t_retry:.1f}s — {error_msg}")
                 logging.log_error(db, "error_chat_api", request.user_id, f"Retry failed: {error_msg}")
                 response_text = "Response unavailable. Please try again."
     
@@ -518,7 +527,9 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
     ))
 
     all_candidates = memory_manager.get_memory_candidates(request.user_id, request.session_id, db)
-    
+
+    print(f"[Chat] TOTAL: {time.time()-t_start:.1f}s | phase={current_phase} prompt_idx={current_prompt_index}")
+
     return {
         "response": response_text,
         "memory_candidates": [schemas.MemoryResponse.model_validate(m) for m in all_candidates],
