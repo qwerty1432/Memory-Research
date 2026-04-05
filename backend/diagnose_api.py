@@ -15,25 +15,29 @@ async def diagnose():
     print("GenAI API Diagnostic")
     print("=" * 60)
     
-    # Check API key
-    api_key = os.getenv("GENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("❌ ERROR: GENAI_API_KEY or OPENAI_API_KEY not found in environment")
-        print("   Make sure your .env file contains: GENAI_API_KEY=sk-...")
-        return False
-    
-    print(f"✅ API Key found: {api_key[:20]}...")
-    
-    # Check if we can import the client
+    # Check if we can import the client (loads keys from GENAI_API_KEY / GENAI_API_KEYS)
     try:
-        from app.genai_client import call_genai, GENAI_API_URL, GENAI_MODEL
+        from app.genai_client import (
+            call_genai,
+            GENAI_API_URL,
+            get_genai_model,
+            get_api_key,
+            configured_key_count,
+        )
         print(f"✅ GenAI client imported successfully")
         print(f"   URL: {GENAI_API_URL}")
-        print(f"   Model: {GENAI_MODEL}")
+        print(f"   Model: {get_genai_model()}")
+        print(f"   API keys configured: {configured_key_count()}")
+        api_key = get_api_key()
+        print(f"   First key prefix: {api_key[:20]}...")
+    except ValueError as e:
+        print(f"❌ ERROR: {e}")
+        print("   Set GENAI_API_KEY=sk-... or GENAI_API_KEYS=key1,key2,...")
+        return False
     except Exception as e:
         print(f"❌ ERROR importing genai_client: {e}")
         return False
-    
+
     # Test API call
     print("\nTesting API call...")
     messages = [
@@ -49,7 +53,7 @@ async def diagnose():
                 "Content-Type": "application/json"
             }
             body = {
-                "model": GENAI_MODEL,
+                "model": get_genai_model(),
                 "messages": messages,
                 "stream": False,
                 "temperature": 0.7

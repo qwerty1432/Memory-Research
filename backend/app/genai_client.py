@@ -4,9 +4,15 @@ Purdue GenAI API client for chat completions.
 Uses sync httpx in a thread pool because httpx.AsyncClient has a known
 DNS/SSL incompatibility with the anyio backend on this server (async
 times out while sync completes in ~2 s).
+
+Model: set GENAI_MODEL (default gpt-oss:latest — RCAC keeps this hot in GPU memory).
+
+Keys: set GENAI_API_KEYS=key1,key2,... or comma-separated GENAI_API_KEY.
+      Keys are chosen round-robin per API call to spread rate limits.
 """
 import asyncio
 import os
+import threading
 import time
 import httpx
 import json
@@ -14,15 +20,62 @@ from typing import AsyncIterator, Optional
 
 
 GENAI_API_URL = "https://genai.rcac.purdue.edu/api/chat/completions"
-GENAI_MODEL = "llama3.1:latest"
+
+# Default: RCAC indicated gpt-oss:latest / llama4 stay resident; older models may cold-load.
+_DEFAULT_MODEL = "gpt-oss:latest"
+
+_keys_cache: list[str] | None = None
+_key_lock = threading.Lock()
+_key_rr = 0
+
+
+def get_genai_model() -> str:
+    """Model id for chat completions (OpenAI-compatible body)."""
+    return (os.getenv("GENAI_MODEL") or _DEFAULT_MODEL).strip()
+
+
+def _load_api_keys() -> list[str]:
+    global _keys_cache
+    if _keys_cache is not None:
+        return _keys_cache
+    raw = (os.getenv("GENAI_API_KEYS") or "").strip()
+    if raw:
+        _keys_cache = [k.strip() for k in raw.split(",") if k.strip()]
+    else:
+        single = (os.getenv("GENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
+        if "," in single:
+            _keys_cache = [k.strip() for k in single.split(",") if k.strip()]
+        elif single:
+            _keys_cache = [single]
+        else:
+            _keys_cache = []
+    if not _keys_cache:
+        raise ValueError(
+            "No GenAI API keys found. Set GENAI_API_KEYS or GENAI_API_KEY (comma-separated for multiple keys)."
+        )
+    return _keys_cache
+
+
+def next_api_key() -> str:
+    """Round-robin key for each GenAI call to spread per-key rate limits."""
+    keys = _load_api_keys()
+    if len(keys) == 1:
+        return keys[0]
+    global _key_rr
+    with _key_lock:
+        k = keys[_key_rr % len(keys)]
+        _key_rr += 1
+        return k
 
 
 def get_api_key() -> str:
-    """Get the GenAI API key from environment"""
-    api_key = os.getenv("GENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("GENAI_API_KEY or OPENAI_API_KEY not found in environment variables")
-    return api_key
+    """Return one key (first in list). Prefer next_api_key() for new calls."""
+    return _load_api_keys()[0]
+
+
+def configured_key_count() -> int:
+    """Number of API keys configured (for logging / diagnostics)."""
+    return len(_load_api_keys())
 
 
 def _sync_call(headers: dict, body: dict) -> httpx.Response:
@@ -44,7 +97,7 @@ async def call_genai(
     temperature: float = 0.7,
     max_tokens: Optional[int] = None
 ) -> str:
-    api_key = get_api_key()
+    api_key = next_api_key()
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -52,7 +105,7 @@ async def call_genai(
     }
 
     body = {
-        "model": GENAI_MODEL,
+        "model": get_genai_model(),
         "messages": messages,
         "stream": stream,
         "temperature": temperature
@@ -85,7 +138,7 @@ async def stream_genai(
     Stream responses from Purdue GenAI API.
     Uses sync httpx in a background thread, then yields chunks.
     """
-    api_key = get_api_key()
+    api_key = next_api_key()
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -93,7 +146,7 @@ async def stream_genai(
     }
 
     body = {
-        "model": GENAI_MODEL,
+        "model": get_genai_model(),
         "messages": messages,
         "stream": True,
         "temperature": temperature
@@ -128,3 +181,10 @@ async def stream_genai(
     chunks = await asyncio.to_thread(_sync_stream)
     for chunk in chunks:
         yield chunk
+
+
+def __getattr__(name: str):
+    """Backward compatibility: GENAI_MODEL -> get_genai_model()."""
+    if name == "GENAI_MODEL":
+        return get_genai_model()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
