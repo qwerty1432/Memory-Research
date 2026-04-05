@@ -24,11 +24,11 @@ async def main():
     # Tiny live call to RCAC (uses next key in sequence)
     print("Live ping (1 GenAI call)...")
     out = await call_genai(
-        [{"role": "user", "content": "Reply with only: ok"}],
+        [{"role": "user", "content": "Reply with exactly one word: ok"}],
         stream=False,
-        max_tokens=5,
+        max_tokens=32,
     )
-    print(f"  Response: {(out or '')[:80]}")
+    print(f"  Response (repr): {repr((out or '')[:120])}")
 
 
 if __name__ == "__main__":
