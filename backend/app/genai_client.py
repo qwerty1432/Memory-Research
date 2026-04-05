@@ -56,16 +56,17 @@ def _load_api_keys() -> list[str]:
     return _keys_cache
 
 
-def next_api_key() -> str:
-    """Round-robin key for each GenAI call to spread per-key rate limits."""
+def next_api_key() -> tuple[str, int]:
+    """Round-robin (api_key, key_slot). key_slot is 0..n-1 for logs (no secrets)."""
     keys = _load_api_keys()
     if len(keys) == 1:
-        return keys[0]
+        return keys[0], 0
     global _key_rr
     with _key_lock:
-        k = keys[_key_rr % len(keys)]
+        slot = _key_rr % len(keys)
+        k = keys[slot]
         _key_rr += 1
-        return k
+        return k, slot
 
 
 def get_api_key() -> str:
@@ -78,13 +79,14 @@ def configured_key_count() -> int:
     return len(_load_api_keys())
 
 
-def _sync_call(headers: dict, body: dict) -> httpx.Response:
+def _sync_call(headers: dict, body: dict, key_slot: int = -1) -> httpx.Response:
     t0 = time.time()
     with httpx.Client(timeout=120.0) as client:
         resp = client.post(GENAI_API_URL, headers=headers, json=body)
     elapsed = time.time() - t0
     tokens = resp.json().get("usage", {}) if resp.status_code == 200 else {}
-    print(f"[GenAI] {elapsed:.1f}s | status={resp.status_code} | "
+    slot_part = f"key_slot={key_slot} | " if key_slot >= 0 else ""
+    print(f"[GenAI] {slot_part}{elapsed:.1f}s | status={resp.status_code} | "
           f"max_tokens={body.get('max_tokens','none')} | "
           f"prompt_tok={tokens.get('prompt_tokens','?')} "
           f"comp_tok={tokens.get('completion_tokens','?')}")
@@ -97,7 +99,7 @@ async def call_genai(
     temperature: float = 0.7,
     max_tokens: Optional[int] = None
 ) -> str:
-    api_key = next_api_key()
+    api_key, key_slot = next_api_key()
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -114,7 +116,7 @@ async def call_genai(
     if max_tokens:
         body["max_tokens"] = max_tokens
 
-    response = await asyncio.to_thread(_sync_call, headers, body)
+    response = await asyncio.to_thread(_sync_call, headers, body, key_slot)
 
     if response.status_code != 200:
         raise Exception(f"GenAI API error: {response.status_code}, {response.text}")
@@ -138,7 +140,7 @@ async def stream_genai(
     Stream responses from Purdue GenAI API.
     Uses sync httpx in a background thread, then yields chunks.
     """
-    api_key = next_api_key()
+    api_key, key_slot = next_api_key()
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -157,6 +159,7 @@ async def stream_genai(
 
     def _sync_stream():
         chunks = []
+        print(f"[GenAI] key_slot={key_slot} | stream request...")
         with httpx.Client(timeout=120.0) as client:
             with client.stream("POST", GENAI_API_URL, headers=headers, json=body) as resp:
                 if resp.status_code != 200:
