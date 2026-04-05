@@ -74,7 +74,7 @@ async def startup_event():
             await call_genai(
                 [{"role": "user", "content": "Hi"}],
                 stream=False,
-                max_tokens=5,
+                max_tokens=64,
             )
             print("GenAI warm-up: OK")
         except Exception as e:

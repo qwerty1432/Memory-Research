@@ -28,10 +28,12 @@ async def main():
         print(f"  call {i + 1} -> key_slot={slot}")
     # Tiny live call to RCAC (uses next key in sequence)
     print("Live ping (1 GenAI call)...")
+    # Reasoning models (e.g. gpt-oss) may use the whole small budget before visible text;
+    # use enough headroom for a one-word reply after internal reasoning.
     out = await call_genai(
         [{"role": "user", "content": "Reply with exactly one word: ok"}],
         stream=False,
-        max_tokens=32,
+        max_tokens=256,
     )
     print(f"  Response (repr): {repr((out or '')[:120])}")
     if not (out or "").strip():
@@ -41,7 +43,7 @@ async def main():
             "model": get_genai_model(),
             "messages": [{"role": "user", "content": "Say hi in one word."}],
             "stream": False,
-            "max_tokens": 32,
+            "max_tokens": 256,
             "temperature": 0.7,
         }
         r = httpx.post(

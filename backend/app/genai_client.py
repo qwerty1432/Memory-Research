@@ -53,6 +53,34 @@ def _extract_assistant_content(message: Any) -> str:
             return v
     return ""
 
+
+def _extract_delta_text(delta: Any) -> str:
+    """Text from a streaming chunk's delta (OpenAI-compatible; some models use lists or reasoning fields)."""
+    if not isinstance(delta, dict):
+        return ""
+    c = delta.get("content")
+    if isinstance(c, str) and c:
+        return c
+    if isinstance(c, list):
+        parts: list[str] = []
+        for p in c:
+            if isinstance(p, dict):
+                if p.get("type") == "text" and "text" in p:
+                    parts.append(str(p["text"]))
+                elif "text" in p:
+                    parts.append(str(p["text"]))
+                elif "content" in p:
+                    parts.append(str(p["content"]))
+            elif isinstance(p, str):
+                parts.append(p)
+        return "".join(parts)
+    for key in ("reasoning_content", "reasoning", "text"):
+        v = delta.get(key)
+        if isinstance(v, str) and v:
+            return v
+    return ""
+
+
 # Default: RCAC indicated gpt-oss:latest / llama4 stay resident; older models may cold-load.
 _DEFAULT_MODEL = "gpt-oss:latest"
 
@@ -171,10 +199,20 @@ async def call_genai(
     # reports completion_tokens > 0; the browser UI uses /chat/stream which works. Retry
     # as SSE aggregation when we know tokens were billed but body has no text.
     if not text.strip() and comp_toks > 0:
-        print("[GenAI] non-stream body empty but completion_tokens>0; aggregating stream...")
+        # Tiny max_tokens (e.g. 32) can be exhausted by reasoning before visible text; retry
+        # stream with a floor so gpt-oss-style models can emit assistant content.
+        retry_max = max_tokens
+        if retry_max is not None:
+            retry_max = max(retry_max, 256)
+        else:
+            retry_max = 512
+        print(
+            "[GenAI] non-stream body empty but completion_tokens>0; aggregating stream "
+            f"(max_tokens={retry_max})..."
+        )
         parts: list[str] = []
         async for chunk in stream_genai(
-            messages, temperature=temperature, max_tokens=max_tokens
+            messages, temperature=temperature, max_tokens=retry_max
         ):
             parts.append(chunk)
         return "".join(parts)
@@ -209,7 +247,8 @@ async def stream_genai(
         body["max_tokens"] = max_tokens
 
     def _sync_stream():
-        chunks = []
+        chunks: list[str] = []
+        raw_lines: list[str] = []
         print(f"[GenAI] key_slot={key_slot} | stream request...")
         with httpx.Client(timeout=120.0) as client:
             with client.stream("POST", GENAI_API_URL, headers=headers, json=body) as resp:
@@ -217,19 +256,37 @@ async def stream_genai(
                     error_text = resp.read()
                     raise Exception(f"GenAI API error: {resp.status_code}, {error_text.decode()}")
                 for line in resp.iter_lines():
-                    if line.startswith("data: "):
-                        data_str = line[6:]
-                        if data_str.strip() == "[DONE]":
-                            break
-                        try:
-                            data = json.loads(data_str)
-                            if "choices" in data and len(data["choices"]) > 0:
-                                delta = data["choices"][0].get("delta", {})
-                                content = delta.get("content", "")
-                                if content:
-                                    chunks.append(content)
-                        except json.JSONDecodeError:
-                            continue
+                    if not line:
+                        continue
+                    # SSE: "data: {...}" or "data:{...}"; some proxies omit space
+                    if line.startswith("data:"):
+                        data_str = line[5:].lstrip()
+                    elif line.startswith("{"):
+                        data_str = line
+                    else:
+                        continue
+                    if data_str.strip() == "[DONE]":
+                        break
+                    if len(raw_lines) < 12:
+                        raw_lines.append(data_str[:400])
+                    try:
+                        data = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    if "choices" not in data or not data["choices"]:
+                        continue
+                    ch0 = data["choices"][0]
+                    delta = ch0.get("delta") or {}
+                    piece = _extract_delta_text(delta)
+                    if not piece:
+                        piece = _extract_assistant_content(ch0.get("message") or {})
+                    if piece:
+                        chunks.append(piece)
+        if not chunks and raw_lines:
+            print(
+                "[GenAI] warn: stream yielded no text; first chunk lines (truncated):\n  "
+                + "\n  ".join(raw_lines[:5])
+            )
         return chunks
 
     chunks = await asyncio.to_thread(_sync_stream)
