@@ -16,10 +16,42 @@ import threading
 import time
 import httpx
 import json
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 
 
 GENAI_API_URL = "https://genai.rcac.purdue.edu/api/chat/completions"
+
+
+def _extract_assistant_content(message: Any) -> str:
+    """
+    Normalize assistant text from chat completion message.
+    Some models (e.g. gpt-oss) return content as a list of parts or use alternate fields.
+    """
+    if not isinstance(message, dict):
+        return ""
+    c = message.get("content")
+    if isinstance(c, str) and c.strip():
+        return c
+    if isinstance(c, list):
+        parts: list[str] = []
+        for p in c:
+            if isinstance(p, dict):
+                if p.get("type") == "text" and "text" in p:
+                    parts.append(str(p["text"]))
+                elif "text" in p:
+                    parts.append(str(p["text"]))
+                elif "content" in p:
+                    parts.append(str(p["content"]))
+            elif isinstance(p, str):
+                parts.append(p)
+        return "".join(parts).strip()
+    if isinstance(c, str):
+        return c
+    for key in ("reasoning_content", "reasoning", "text"):
+        v = message.get(key)
+        if isinstance(v, str) and v.strip():
+            return v
+    return ""
 
 # Default: RCAC indicated gpt-oss:latest / llama4 stay resident; older models may cold-load.
 _DEFAULT_MODEL = "gpt-oss:latest"
@@ -126,7 +158,12 @@ async def call_genai(
     else:
         data = response.json()
         if "choices" in data and len(data["choices"]) > 0:
-            return data["choices"][0]["message"]["content"]
+            msg = data["choices"][0].get("message") or {}
+            text = _extract_assistant_content(msg)
+            if not text and isinstance(msg, dict):
+                # Last resort: log shape once for debugging odd models
+                print(f"[GenAI] warn: empty assistant text; message keys={list(msg.keys())}")
+            return text
         else:
             raise Exception(f"Unexpected response format: {data}")
 
