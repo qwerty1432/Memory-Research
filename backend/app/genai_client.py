@@ -155,17 +155,31 @@ async def call_genai(
 
     if stream:
         return ""
-    else:
-        data = response.json()
-        if "choices" in data and len(data["choices"]) > 0:
-            msg = data["choices"][0].get("message") or {}
-            text = _extract_assistant_content(msg)
-            if not text and isinstance(msg, dict):
-                # Last resort: log shape once for debugging odd models
-                print(f"[GenAI] warn: empty assistant text; message keys={list(msg.keys())}")
-            return text
-        else:
-            raise Exception(f"Unexpected response format: {data}")
+    data = response.json()
+    if "choices" not in data or not data["choices"]:
+        raise Exception(f"Unexpected response format: {data}")
+
+    msg = data["choices"][0].get("message") or {}
+    text = _extract_assistant_content(msg)
+    usage = data.get("usage") or {}
+    comp_toks = int(usage.get("completion_tokens") or 0)
+
+    if not text.strip() and isinstance(msg, dict):
+        print(f"[GenAI] warn: empty assistant text; message keys={list(msg.keys())}")
+
+    # RCAC gpt-oss sometimes returns message.content="" on non-stream while usage still
+    # reports completion_tokens > 0; the browser UI uses /chat/stream which works. Retry
+    # as SSE aggregation when we know tokens were billed but body has no text.
+    if not text.strip() and comp_toks > 0:
+        print("[GenAI] non-stream body empty but completion_tokens>0; aggregating stream...")
+        parts: list[str] = []
+        async for chunk in stream_genai(
+            messages, temperature=temperature, max_tokens=max_tokens
+        ):
+            parts.append(chunk)
+        return "".join(parts)
+
+    return text
 
 
 async def stream_genai(
