@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session as DBSession
 from ..database import get_db, SessionLocal
 from .. import schemas, models, memory_manager, prompt_builder, logging
 from ..models import Message, Session as SessionModel
-from ..genai_client import call_genai, stream_genai
+from ..genai_client import call_genai, sanitize_companion_public_output, stream_genai
 from uuid import UUID
 import asyncio
 import os
@@ -587,10 +587,13 @@ async def chat_stream(request: schemas.ChatRequest, db: DBSession = Depends(get_
                 response_text = followup_override
                 yield {"data": json.dumps({"token": response_text})}
             else:
-                # Stream response from GenAI API
+                # Stream from GenAI, then sanitize (reasoning models may emit planning in content).
+                raw = ""
                 async for chunk in stream_genai(messages):
-                    response_text += chunk
-                    yield {"data": json.dumps({"token": chunk})}
+                    raw += chunk
+                response_text = sanitize_companion_public_output(raw)
+                if response_text:
+                    yield {"data": json.dumps({"token": response_text})}
             
             # Save messages to database
             user_message = Message(

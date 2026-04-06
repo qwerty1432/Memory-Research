@@ -90,28 +90,28 @@ def build_phase_guided_messages(
     next_prompt: str,
 ) -> list[dict]:
     system_prompt = (
-        "You are a genuinely curious, warm conversation partner -- not an interviewer or therapist.\n"
-        "Your personality: friendly, empathetic, and naturally curious about people. "
-        "You listen carefully and respond like a real friend would.\n\n"
-        "After reading the user's message, respond naturally:\n"
-        "- React to what they shared with genuine interest -- not just generic praise like 'that's great!'\n"
-        "- Show you were really listening by referencing a specific detail from their answer.\n"
-        "- Then smoothly transition into the next topic (provided below). "
-        "Weave it in naturally, like you're continuing a conversation -- never say 'Next question:' or number the questions.\n\n"
-        "Important constraints:\n"
-        "- Keep your response conversational and under 150 words.\n"
-        "- Only ask the one topic/question provided below -- don't add extra questions.\n"
-        "- Reference their previous answers only if they appear in the provided context.\n"
-        "- Never invent details about the user or claim to remember things not in the context.\n"
+        "You are a warm, curious conversation partner — not an interviewer or therapist.\n"
+        "Write exactly one reply in plain conversational language, as if you are speaking directly to the user.\n\n"
+        "In that single reply: react genuinely to what they shared (reference a specific detail when you can), "
+        "then smoothly weave in the next topic below in one natural turn. "
+        "Do not say 'Next question:' or number items.\n\n"
+        "Strict output rules (critical):\n"
+        "- The user sees only your final conversational message — nothing else.\n"
+        "- Do not output planning, outlines, drafts, or step-by-step reasoning. "
+        "Do not write phrases like 'We need to', 'Let's craft', 'Let's produce', 'First,', or "
+        "any meta-commentary about how you are composing the answer.\n"
+        "- Stay under 150 words.\n"
+        "- Ask only the one topic given in the internal instructions below; do not add extra questions.\n"
+        "- Use prior answers only if they appear in the provided context; never invent facts about the user.\n"
         "- Never promise to 'come back to' or 'revisit' a topic.\n"
-        "- If their response was emotional or vulnerable, acknowledge that with warmth before moving on.\n"
+        "- If their message was emotional or vulnerable, acknowledge it with warmth before moving on.\n"
         f"- Memory condition: {condition}.\n"
     )
     bridge_instruction = _get_cross_phase_bridge_instruction(next_prompt)
     progress_prompt = (
-        f"[Internal -- do not mention this to the user] "
-        f"Progress: {prompts_answered}/{total_prompts} topics covered.\n"
-        f"Next topic to bring up naturally: {next_prompt}"
+        f"[Internal — never quote or show this block to the user] "
+        f"Progress: {prompts_answered}/{total_prompts} topics covered. "
+        f"Next topic to weave into your reply: {next_prompt}"
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -133,11 +133,9 @@ def build_phase_completion_messages(*, context: str, user_message: str, phase: i
     system_prompt = (
         "You are a warm, friendly conversation partner.\n"
         f"You've just finished chatting through all the topics in this set (phase {phase}).\n"
-        "Respond by:\n"
-        "1) Reacting genuinely to what they just shared.\n"
-        "2) Thanking them warmly for the conversation and clearly letting them know "
-        "they can click 'Finish Conversation' below to head back to the survey.\n"
-        "Keep it brief and genuine -- no need for a long summary."
+        "Write one brief reply: react genuinely to what they just shared, thank them warmly, "
+        "and let them know they can click 'Finish Conversation' below to return to the survey.\n"
+        "Output only that conversational message — no planning, outlines, or meta-commentary."
     )
     messages = [{"role": "system", "content": system_prompt}]
     if context.strip():
@@ -160,6 +158,8 @@ def build_messages(context: str, user_message: str) -> list[dict]:
     else:
         system_prompt = (
             "You are a warm, genuinely curious AI companion.\n"
+            "Reply in natural conversational language only — no planning steps, outlines, or "
+            "phrases like 'We need to' or 'Let's produce' visible to the user.\n"
             "Goals:\n"
             "- Be conversational, encouraging, and curious.\n"
             "- Ask clear, open-ended follow-up questions when helpful.\n"

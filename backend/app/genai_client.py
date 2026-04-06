@@ -12,6 +12,7 @@ Keys: set GENAI_API_KEYS=key1,key2,... or comma-separated GENAI_API_KEY.
 """
 import asyncio
 import os
+import re
 import threading
 import time
 import httpx
@@ -74,11 +75,33 @@ def _extract_delta_text(delta: Any) -> str:
             elif isinstance(p, str):
                 parts.append(p)
         return "".join(parts)
-    for key in ("reasoning_content", "reasoning", "text"):
-        v = delta.get(key)
-        if isinstance(v, str) and v:
-            return v
     return ""
+
+
+def sanitize_companion_public_output(text: str) -> str:
+    """
+    gpt-oss and similar reasoning models sometimes emit planning + a final 'Let's produce:'
+    block in the same user-visible string. Keep only the final conversational part when
+    those markers are present.
+    """
+    if not text or not text.strip():
+        return text
+    t = text.strip()
+    # Prefer text after the last 'Let's produce:' (model sometimes echoes full plan first)
+    if re.search(r"(?is)let's produce\s*:", t):
+        parts = re.split(r"(?is)let's produce\s*:", t)
+        if len(parts) > 1:
+            tail = parts[-1].strip()
+            if tail:
+                return tail
+    for label in ("final response:", "final answer:", "assistant response:"):
+        low = t.lower()
+        idx = low.rfind(label)
+        if idx != -1:
+            tail = t[idx + len(label) :].strip()
+            if tail:
+                return tail
+    return t
 
 
 # Default: RCAC indicated gpt-oss:latest / llama4 stay resident; older models may cold-load.
@@ -215,9 +238,9 @@ async def call_genai(
             messages, temperature=temperature, max_tokens=retry_max
         ):
             parts.append(chunk)
-        return "".join(parts)
+        return sanitize_companion_public_output("".join(parts))
 
-    return text
+    return sanitize_companion_public_output(text)
 
 
 async def stream_genai(
