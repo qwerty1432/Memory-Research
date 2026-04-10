@@ -1,81 +1,32 @@
 import os
 import json
-
-PHASE_PROMPT_BANKS: dict[int, list[str]] = {
-    1: [
-        "What would constitute a perfect day for you?",
-        "What is your favorite holiday? Why?",
-        "This one's fun -- imagine you could invite absolutely anyone to dinner. Living, historical, fictional, anyone at all. Who would you pick, and what would you want to talk about with them?",
-        "For what in your life do you feel most grateful?",
-    ],
-    2: [
-        "Is there something that you've dreamed of doing for a long time? Why haven't you done it?",
-        "Tell me your life story in as much detail as possible.",
-        "What is the greatest accomplishment of your life?",
-        "If you could wake up tomorrow having gained any one quality or ability, what would it be?",
-    ],
-    3: [
-        "What kinds of things tend to get you feeling really down or blue?",
-        "If you were to die this evening with no chance to talk to anyone, what would you most regret not having told someone? Why haven't you told them yet?",
-        "What aspects of your personality do you dislike, worry about, or see as a limitation?",
-        "If a crystal ball could tell you the truth about yourself, your life, the future, or anything else, what would you want to know?",
-    ],
-}
+from . import prompt_store
 
 
 def get_phase_prompts(phase: int) -> list[str]:
-    return PHASE_PROMPT_BANKS.get(phase, [])
+    cfg = prompt_store.get_config()
+    return cfg.get("phase_question_banks", {}).get(str(phase), [])
 
 
 def get_phase_opening_message(phase: int) -> str:
+    cfg = prompt_store.get_config()
     prompts = get_phase_prompts(phase)
+    opening_msgs = cfg.get("phase_opening_messages", {})
+
     if not prompts:
-        return "Hey! I'm really glad you're here. Feel free to share whatever's on your mind."
-    if phase == 1:
-        return (
-            "Hey there! I'm really glad you're here. Think of me as your conversation "
-            "partner -- I'm genuinely curious to learn about you.\n\n"
-            "We're going to chat through a few topics together, and there's no right or "
-            "wrong way to answer. Share as much or as little as you're comfortable with, "
-            "and I'll probably ask some follow-up questions just because I find people's "
-            "perspectives really interesting.\n\n"
-            f"Let's start with something fun: {prompts[0]}"
-        )
-    if phase == 2:
-        return (
-            "Great, let's move into our next set of topics! These go a little deeper, "
-            "and I'm really looking forward to hearing your thoughts.\n\n"
-            f"Here's our first one: {prompts[0]}"
-        )
-    return (
-        "Alright, we're heading into the last stretch! These topics are a bit more personal, "
-        "so take your time and share whatever feels right.\n\n"
-        f"Here's where we'll start: {prompts[0]}"
-    )
+        return opening_msgs.get("fallback", "Hey! I'm really glad you're here. Feel free to share whatever's on your mind.")
+
+    template = opening_msgs.get(str(phase), "")
+    if not template:
+        return opening_msgs.get("fallback", "Hey! I'm really glad you're here. Feel free to share whatever's on your mind.")
+
+    return template.replace("{first_question}", prompts[0])
 
 
 def _get_cross_phase_bridge_instruction(next_prompt: str) -> str:
+    cfg = prompt_store.get_config()
+    bridge_map = cfg.get("bridge_instructions", {})
     normalized = (next_prompt or "").strip().lower()
-    bridge_map = {
-        "is there something that you've dreamed of doing for a long time? why haven't you done it?":
-            "If relevant context exists, briefly connect this to the user's earlier 'perfect day' answer or desired quality/ability before asking the required question.",
-        "what kinds of things tend to get you feeling really down or blue?":
-            "If relevant context exists, briefly connect this to whether their earlier 'perfect day' could help them cope, then ask the required question.",
-        "tell me your life story in as much detail as possible.":
-            "If relevant context exists, briefly connect this to the earlier favorite holiday as part of their life narrative, then ask the required question.",
-        "if you were to die this evening with no chance to talk to anyone, what would you most regret not having told someone? why haven't you told them yet?":
-            "If relevant context exists, briefly reference important figures from the earlier life story, then ask the required question.",
-        "what is the greatest accomplishment of your life?":
-            "If relevant context exists, briefly connect this to the earlier dinner guest (for example as an inspiration), then ask the required question.",
-        "what aspects of your personality do you dislike, worry about, or see as a limitation?":
-            "If relevant context exists, briefly connect this to challenges faced while achieving their greatest accomplishment, then ask the required question.",
-        "if you could wake up tomorrow having gained any one quality or ability, what would it be?":
-            "If relevant context exists, briefly connect this to whether their earlier dinner guest embodies that quality, then ask the required question.",
-        "if a crystal ball could tell you the truth about yourself, your life, the future, or anything else, what would you want to know?":
-            "If relevant context exists, briefly connect this to what they've shared about their personality or regrets, then ask the required question.",
-        "for what in your life do you feel most grateful?":
-            "If relevant context exists, briefly connect this to their perfect day or favorite holiday, then ask the required question.",
-    }
     return bridge_map.get(normalized, "")
 
 
@@ -89,24 +40,10 @@ def build_phase_guided_messages(
     total_prompts: int,
     next_prompt: str,
 ) -> list[dict]:
-    system_prompt = (
-        "You are a warm, curious conversation partner — not an interviewer or therapist.\n"
-        "Write exactly one reply in plain conversational language, as if you are speaking directly to the user.\n\n"
-        "In that single reply: react genuinely to what they shared (reference a specific detail when you can), "
-        "then smoothly weave in the next topic below in one natural turn. "
-        "Do not say 'Next question:' or number items.\n\n"
-        "Strict output rules (critical):\n"
-        "- The user sees only your final conversational message — nothing else.\n"
-        "- Do not output planning, outlines, drafts, or step-by-step reasoning. "
-        "Do not write phrases like 'We need to', 'Let's craft', 'Let's produce', 'First,', or "
-        "any meta-commentary about how you are composing the answer.\n"
-        "- Stay under 150 words.\n"
-        "- Ask only the one topic given in the internal instructions below; do not add extra questions.\n"
-        "- Use prior answers only if they appear in the provided context; never invent facts about the user.\n"
-        "- Never promise to 'come back to' or 'revisit' a topic.\n"
-        "- If their message was emotional or vulnerable, acknowledge it with warmth before moving on.\n"
-        f"- Memory condition: {condition}.\n"
-    )
+    cfg = prompt_store.get_config()
+    system_template = cfg.get("guided_system_prompt", "")
+    system_prompt = system_template.replace("{condition}", condition)
+
     bridge_instruction = _get_cross_phase_bridge_instruction(next_prompt)
     progress_prompt = (
         f"[Internal — never quote or show this block to the user] "
@@ -130,13 +67,10 @@ def build_phase_guided_messages(
 
 
 def build_phase_completion_messages(*, context: str, user_message: str, phase: int) -> list[dict]:
-    system_prompt = (
-        "You are a warm, friendly conversation partner.\n"
-        f"You've just finished chatting through all the topics in this set (phase {phase}).\n"
-        "Write one brief reply: react genuinely to what they just shared, thank them warmly, "
-        "and let them know they can click 'Finish Conversation' below to return to the survey.\n"
-        "Output only that conversational message — no planning, outlines, or meta-commentary."
-    )
+    cfg = prompt_store.get_config()
+    system_template = cfg.get("phase_completion_prompt", "")
+    system_prompt = system_template.replace("{phase}", str(phase))
+
     messages = [{"role": "system", "content": system_prompt}]
     if context.strip():
         messages.append(
@@ -150,28 +84,14 @@ def build_phase_completion_messages(*, context: str, user_message: str, phase: i
 
 
 def build_messages(context: str, user_message: str) -> list[dict]:
+    cfg = prompt_store.get_config()
     tone = (os.getenv("CHAT_TONE") or "extroverted").strip().lower()
     if tone == "neutral":
-        system_prompt = (
-            "You are a friendly AI companion. Use the provided context to have a natural conversation."
-        )
+        system_prompt = cfg.get("free_chat_prompt_neutral", "You are a friendly AI companion.")
     else:
-        system_prompt = (
-            "You are a warm, genuinely curious AI companion.\n"
-            "Reply in natural conversational language only — no planning steps, outlines, or "
-            "phrases like 'We need to' or 'Let's produce' visible to the user.\n"
-            "Goals:\n"
-            "- Be conversational, encouraging, and curious.\n"
-            "- Ask clear, open-ended follow-up questions when helpful.\n"
-            "- If the user's answer is very short or vague, gently ask for more detail before moving on.\n"
-            "- Never pressure the user to disclose; respect boundaries and accept 'I'd rather not say'.\n"
-            "- Do not claim to have personal experiences.\n"
-            "- Use the provided context if relevant, but do not invent facts.\n"
-        )
+        system_prompt = cfg.get("free_chat_prompt_extroverted", "You are a warm AI companion.")
 
-    messages = [
-        {"role": "system", "content": system_prompt}
-    ]
+    messages = [{"role": "system", "content": system_prompt}]
 
     if context.strip():
         messages.append({
@@ -179,11 +99,7 @@ def build_messages(context: str, user_message: str) -> list[dict]:
             "content": f"Context from previous conversations:\n{context}"
         })
 
-    messages.append({
-        "role": "user",
-        "content": user_message
-    })
-
+    messages.append({"role": "user", "content": user_message})
     return messages
 
 
@@ -216,34 +132,17 @@ async def assess_effort_relevance(
 ) -> dict:
     from .genai_client import call_genai
 
-    prompt = f"""You are evaluating a conversation for a research chatbot.
+    cfg = prompt_store.get_config()
+    user_template = cfg.get("effort_assessment_user_template", "")
+    prompt = user_template.replace(
+        "{last_assistant_prompt}", json.dumps((last_assistant_prompt or "").strip()[:800])
+    ).replace(
+        "{user_response}", json.dumps((user_message or "").strip()[:800])
+    )
 
-Given:
-- Assistant_prompt: {json.dumps((last_assistant_prompt or "").strip()[:800])}
-- User_response: {json.dumps((user_message or "").strip()[:800])}
-
-Task:
-Return STRICT JSON only (no markdown) with exactly these keys:
-- relevance_score: integer 1-3 (1=off-topic, 2=somewhat relevant, 3=clearly relevant)
-- effort_score: integer 1-3 (1=very low effort, 2=some detail, 3=thoughtful/detailed)
-- needs_followup: boolean
-- followup_question: string (a warm, curious follow-up; empty string if needs_followup is false)
-
-Rules for needs_followup:
-- Set to false if the user gave a substantive answer (even if brief -- a clear 2-3 sentence answer is sufficient).
-- Set to false if the user explicitly declines to answer or says they'd rather not.
-- Set to true ONLY if the response is clearly evasive, completely off-topic, or so vague it's impossible to understand what they mean.
-- When in doubt, set to false. The goal is natural conversation, not interrogation.
-
-Rules for followup_question (when needs_followup is true):
-- Frame it as genuine curiosity, not assessment (e.g., "I'm curious -- what made you think of that?" not "Could you elaborate more?").
-- Keep it specific to what they said, not generic.
-- Never say you will "come back later" or "revisit".
-- Do not include any other keys.
-"""
-
+    system_content = cfg.get("effort_assessment_system", "You output strict JSON only.")
     messages = [
-        {"role": "system", "content": "You output strict JSON only."},
+        {"role": "system", "content": system_content},
         {"role": "user", "content": prompt},
     ]
 
@@ -314,23 +213,24 @@ async def maybe_build_followup_override(
     - Substantive response: use LLM to assess; only follow up if truly evasive
     - Sufficient: return None (advance immediately)
     """
+    cfg = prompt_store.get_config()
     max_followups = 3
     used_followups = [s.strip().lower() for s in (used_followups_for_prompt or []) if str(s).strip()]
     min_words = 5
     if _is_generic_or_too_short(user_message, min_words=min_words):
         if followups_used_for_prompt < max_followups:
             if current_required_prompt:
-                followup_variants = [
-                    f"No worries! Take your time with this one. What first comes to mind when you think about it?",
-                    f"I'm curious to hear your take -- even a quick thought would be great!",
-                    f"That's okay! Is there anything at all that stands out to you about this?",
-                ]
+                followup_variants = list(cfg.get("followup_variants_with_prompt", [
+                    "No worries! Take your time with this one. What first comes to mind when you think about it?",
+                    "I'm curious to hear your take -- even a quick thought would be great!",
+                    "That's okay! Is there anything at all that stands out to you about this?",
+                ]))
             else:
-                followup_variants = [
+                followup_variants = list(cfg.get("followup_variants_without_prompt", [
                     "No rush! What's the first thing that comes to mind?",
                     "I'm curious to hear more -- even a quick thought!",
                     "That's okay! Anything at all stand out to you?",
-                ]
+                ]))
             ordered = [
                 followup_variants[(followups_used_for_prompt + i) % len(followup_variants)]
                 for i in range(len(followup_variants))
@@ -407,35 +307,24 @@ async def extract_memories_from_conversation(
 
     CRITICAL: Only extracts from the user's message, NOT from assistant responses or inferences.
     """
+    cfg = prompt_store.get_config()
     existing_context = ""
     if existing_memories:
         existing_context = "\n\nExisting memories (DO NOT extract these again):\n" + "\n".join(f"- {mem}" for mem in existing_memories[:20])
 
-    extraction_prompt = f"""You are a memory extraction assistant. Extract ONLY factual information that the USER explicitly stated in their message.
+    user_template = cfg.get("memory_extraction_user_template", "")
+    extraction_prompt = user_template.replace(
+        "{user_message}", user_message
+    ).replace(
+        "{existing_context}", existing_context
+    )
 
-CRITICAL RULES:
-1. Extract ONLY from the user's message below - ignore everything else
-2. Do NOT extract information from assistant responses or anything the assistant inferred
-3. Only extract if the information is NEW and explicitly stated by the user
-4. Do NOT extract information that already exists in the existing memories list
-5. Return "None" if no new information is present in the user's message
-6. Extract only clear, factual statements about the user
-7. Return each memory as a separate line, starting with "User" (e.g., "User mentioned liking hiking")
-
-User's message:
-{user_message}{existing_context}
-
-Extract memories (one per line, or "None" if nothing new):"""
+    system_content = cfg.get("memory_extraction_system",
+        "You are a memory extraction assistant. Extract ONLY factual information that the user explicitly stated.")
 
     messages = [
-        {
-            "role": "system",
-            "content": "You are a memory extraction assistant. Extract ONLY factual information that the user explicitly stated. Do NOT extract from assistant responses or inferences."
-        },
-        {
-            "role": "user",
-            "content": extraction_prompt
-        }
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": extraction_prompt},
     ]
 
     from .genai_client import call_genai

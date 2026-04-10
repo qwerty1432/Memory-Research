@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import init_db, engine
 from . import models
-from .routers import auth, chat, memory, condition, session, survey
+from .routers import auth, chat, memory, condition, session, survey, prompts
 import os
 
 # Initialize database
@@ -59,6 +59,7 @@ app.include_router(memory.router)
 app.include_router(condition.router)
 app.include_router(session.router)
 app.include_router(survey.router)
+app.include_router(prompts.router)
 
 
 @app.on_event("startup")

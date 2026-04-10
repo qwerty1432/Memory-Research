@@ -216,6 +216,42 @@ export const memoryAPI = {
   },
 };
 
+// Prompts API (Prompt Playground)
+export interface PromptConfig {
+  phase_question_banks: Record<string, string[]>;
+  phase_opening_messages: Record<string, string>;
+  guided_system_prompt: string;
+  phase_completion_prompt: string;
+  free_chat_prompt_extroverted: string;
+  free_chat_prompt_neutral: string;
+  bridge_instructions: Record<string, string>;
+  effort_assessment_system: string;
+  effort_assessment_user_template: string;
+  memory_extraction_system: string;
+  memory_extraction_user_template: string;
+  followup_variants_with_prompt: string[];
+  followup_variants_without_prompt: string[];
+}
+
+export const promptsAPI = {
+  get: async (): Promise<PromptConfig> => {
+    const response = await api.get('/prompts');
+    return response.data;
+  },
+  update: async (config: Partial<PromptConfig>): Promise<{ status: string; config: PromptConfig }> => {
+    const response = await api.put('/prompts', config);
+    return response.data;
+  },
+  save: async (): Promise<{ status: string }> => {
+    const response = await api.post('/prompts/save');
+    return response.data;
+  },
+  reset: async (): Promise<{ status: string; config: PromptConfig }> => {
+    const response = await api.post('/prompts/reset');
+    return response.data;
+  },
+};
+
 // Condition API
 export const conditionAPI = {
   get: async (userId: string) => {

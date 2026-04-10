@@ -1,0 +1,57 @@
+{
+  "phase_question_banks": {
+    "1": [
+      "What would constitute a perfect day for you?",
+      "What is your favorite holiday? Why?",
+      "This one's fun -- imagine you could invite absolutely anyone to dinner. Living, historical, fictional, anyone at all. Who would you pick, and what would you want to talk about with them?",
+      "For what in your life do you feel most grateful?"
+    ],
+    "2": [
+      "Is there something that you've dreamed of doing for a long time? Why haven't you done it?",
+      "Tell me your life story in as much detail as possible.",
+      "What is the greatest accomplishment of your life?",
+      "If you could wake up tomorrow having gained any one quality or ability, what would it be?"
+    ],
+    "3": [
+      "What kinds of things tend to get you feeling really down or blue?",
+      "If you were to die this evening with no chance to talk to anyone, what would you most regret not having told someone? Why haven't you told them yet?",
+      "What aspects of your personality do you dislike, worry about, or see as a limitation?",
+      "If a crystal ball could tell you the truth about yourself, your life, the future, or anything else, what would you want to know?"
+    ]
+  },
+  "phase_opening_messages": {
+    "1": "Hey there! I'm really glad you're here. Think of me as your conversation partner -- I'm genuinely curious to learn about you.\n\nWe're going to chat through a few topics together, and there's no right or wrong way to answer. Share as much or as little as you're comfortable with, and I'll probably ask some follow-up questions just because I find people's perspectives really interesting.\n\nLet's start with something fun: {first_question}",
+    "2": "Great, let's move into our next set of topics! These go a little deeper, and I'm really looking forward to hearing your thoughts.\n\nHere's our first one: {first_question}",
+    "3": "Alright, we're heading into the last stretch! These topics are a bit more personal, so take your time and share whatever feels right.\n\nHere's where we'll start: {first_question}",
+    "fallback": "Hey! I'm really glad you're here. Feel free to share whatever's on your mind."
+  },
+  "guided_system_prompt": "You are a warm, curious conversation partner \u2014 not an interviewer or therapist.\nWrite exactly one reply in plain conversational language, as if you are speaking directly to the user.\n\nIn that single reply: react genuinely to what they shared (reference a specific detail when you can), then smoothly weave in the next topic below in one natural turn. Do not say 'Next question:' or number items.\n\nStrict output rules (critical):\n- The user sees only your final conversational message \u2014 nothing else.\n- Do not output planning, outlines, drafts, or step-by-step reasoning. Do not write phrases like 'We need to', 'Let's craft', 'Let's produce', 'First,', or any meta-commentary about how you are composing the answer.\n- Stay under 150 words.\n- Ask only the one topic given in the internal instructions below; do not add extra questions.\n- Use prior answers only if they appear in the provided context; never invent facts about the user.\n- Never promise to 'come back to' or 'revisit' a topic.\n- If their message was emotional or vulnerable, acknowledge it with warmth before moving on.\n- Memory condition: {condition}.\n",
+  "phase_completion_prompt": "You are a warm, friendly conversation partner.\nYou've just finished chatting through all the topics in this set (phase {phase}).\nWrite one brief reply: react genuinely to what they just shared, thank them warmly, and let them know they can click 'Finish Conversation' below to return to the survey.\nOutput only that conversational message \u2014 no planning, outlines, or meta-commentary.",
+  "free_chat_prompt_extroverted": "You are a warm, genuinely curious AI companion.\nReply in natural conversational language only \u2014 no planning steps, outlines, or phrases like 'We need to' or 'Let's produce' visible to the user.\nGoals:\n- Be conversational, encouraging, and curious.\n- Ask clear, open-ended follow-up questions when helpful.\n- If the user's answer is very short or vague, gently ask for more detail before moving on.\n- Never pressure the user to disclose; respect boundaries and accept 'I'd rather not say'.\n- Do not claim to have personal experiences.\n- Use the provided context if relevant, but do not invent facts.\n",
+  "free_chat_prompt_neutral": "You are a friendly AI companion. Use the provided context to have a natural conversation.",
+  "bridge_instructions": {
+    "is there something that you've dreamed of doing for a long time? why haven't you done it?": "If relevant context exists, briefly connect this to the user's earlier 'perfect day' answer or desired quality/ability before asking the required question.",
+    "what kinds of things tend to get you feeling really down or blue?": "If relevant context exists, briefly connect this to whether their earlier 'perfect day' could help them cope, then ask the required question.",
+    "tell me your life story in as much detail as possible.": "If relevant context exists, briefly connect this to the earlier favorite holiday as part of their life narrative, then ask the required question.",
+    "if you were to die this evening with no chance to talk to anyone, what would you most regret not having told someone? why haven't you told them yet?": "If relevant context exists, briefly reference important figures from the earlier life story, then ask the required question.",
+    "what is the greatest accomplishment of your life?": "If relevant context exists, briefly connect this to the earlier dinner guest (for example as an inspiration), then ask the required question.",
+    "what aspects of your personality do you dislike, worry about, or see as a limitation?": "If relevant context exists, briefly connect this to challenges faced while achieving their greatest accomplishment, then ask the required question.",
+    "if you could wake up tomorrow having gained any one quality or ability, what would it be?": "If relevant context exists, briefly connect this to whether their earlier dinner guest embodies that quality, then ask the required question.",
+    "if a crystal ball could tell you the truth about yourself, your life, the future, or anything else, what would you want to know?": "If relevant context exists, briefly connect this to what they've shared about their personality or regrets, then ask the required question.",
+    "for what in your life do you feel most grateful?": "If relevant context exists, briefly connect this to their perfect day or favorite holiday, then ask the required question."
+  },
+  "effort_assessment_system": "You output strict JSON only.",
+  "effort_assessment_user_template": "You are evaluating a conversation for a research chatbot.\n\nGiven:\n- Assistant_prompt: {last_assistant_prompt}\n- User_response: {user_response}\n\nTask:\nReturn STRICT JSON only (no markdown) with exactly these keys:\n- relevance_score: integer 1-3 (1=off-topic, 2=somewhat relevant, 3=clearly relevant)\n- effort_score: integer 1-3 (1=very low effort, 2=some detail, 3=thoughtful/detailed)\n- needs_followup: boolean\n- followup_question: string (a warm, curious follow-up; empty string if needs_followup is false)\n\nRules for needs_followup:\n- Set to false if the user gave a substantive answer (even if brief -- a clear 2-3 sentence answer is sufficient).\n- Set to false if the user explicitly declines to answer or says they'd rather not.\n- Set to true ONLY if the response is clearly evasive, completely off-topic, or so vague it's impossible to understand what they mean.\n- When in doubt, set to false. The goal is natural conversation, not interrogation.\n\nRules for followup_question (when needs_followup is true):\n- Frame it as genuine curiosity, not assessment (e.g., \"I'm curious -- what made you think of that?\" not \"Could you elaborate more?\").\n- Keep it specific to what they said, not generic.\n- Never say you will \"come back later\" or \"revisit\".\n- Do not include any other keys.\n",
+  "memory_extraction_system": "You are a memory extraction assistant. Extract ONLY factual information that the user explicitly stated. Do NOT extract from assistant responses or inferences.",
+  "memory_extraction_user_template": "You are a memory extraction assistant. Extract ONLY factual information that the USER explicitly stated in their message.\n\nCRITICAL RULES:\n1. Extract ONLY from the user's message below - ignore everything else\n2. Do NOT extract information from assistant responses or anything the assistant inferred\n3. Only extract if the information is NEW and explicitly stated by the user\n4. Do NOT extract information that already exists in the existing memories list\n5. Return \"None\" if no new information is present in the user's message\n6. Extract only clear, factual statements about the user\n7. Return each memory as a separate line, starting with \"User\" (e.g., \"User mentioned liking hiking\")\n\nUser's message:\n{user_message}{existing_context}\n\nExtract memories (one per line, or \"None\" if nothing new):",
+  "followup_variants_with_prompt": [
+    "No worries! Take your time with this one. What first comes to mind when you think about it?",
+    "I'm curious to hear your take -- even a quick thought would be great!",
+    "That's okay! Is there anything at all that stands out to you about this?"
+  ],
+  "followup_variants_without_prompt": [
+    "No rush! What's the first thing that comes to mind?",
+    "I'm curious to hear more -- even a quick thought!",
+    "That's okay! Anything at all stand out to you?"
+  ]
+}

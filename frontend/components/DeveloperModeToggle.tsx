@@ -142,6 +142,16 @@ export default function DeveloperModeToggle({
           </button>
         ))}
       </div>
+      <div className="mt-4 pt-3 border-t border-white/40">
+        <a
+          href="/playground"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block w-full text-center px-4 py-2 text-xs rounded-2xl border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition"
+        >
+          Prompt Playground
+        </a>
+      </div>
     </div>
   );
 }
