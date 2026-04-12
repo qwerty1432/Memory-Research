@@ -9,24 +9,25 @@ import { promptsAPI, PromptConfig, chatAPI, authAPI, sessionAPI, Message, PhaseS
 interface SectionDef {
   key: keyof PromptConfig;
   label: string;
+  description: string;
   type: 'textarea' | 'string-list' | 'string-map' | 'phase-bank';
 }
 
 const CONVERSATION_SECTIONS: SectionDef[] = [
-  { key: 'phase_question_banks', label: 'Phase Question Banks', type: 'phase-bank' },
-  { key: 'phase_opening_messages', label: 'Phase Opening Messages', type: 'string-map' },
-  { key: 'guided_system_prompt', label: 'Guided Chat System Prompt', type: 'textarea' },
-  { key: 'phase_completion_prompt', label: 'Phase Completion Prompt', type: 'textarea' },
-  { key: 'bridge_instructions', label: 'Bridge Instructions', type: 'string-map' },
-  { key: 'followup_variants_with_prompt', label: 'Follow-up Variants (with prompt)', type: 'string-list' },
-  { key: 'followup_variants_without_prompt', label: 'Follow-up Variants (without prompt)', type: 'string-list' },
+  { key: 'phase_question_banks', label: 'Phase Question Banks', description: 'The actual questions asked during each phase (4 per phase, 12 total). The companion weaves these into conversation one at a time, advancing after the participant gives a sufficient answer.', type: 'phase-bank' },
+  { key: 'phase_opening_messages', label: 'Phase Opening Messages', description: 'The first message the companion sends at the start of each phase. Use {first_question} where the first question should appear. "fallback" is used if a phase has no questions.', type: 'string-map' },
+  { key: 'guided_system_prompt', label: 'Guided Chat System Prompt', description: 'The main personality and behavior instructions sent to the LLM on every guided conversation turn. This is the most impactful prompt to tune — it controls tone, style, and constraints. Use {condition} for the memory condition.', type: 'textarea' },
+  { key: 'phase_completion_prompt', label: 'Phase Completion Prompt', description: 'Sent as the system prompt when the participant finishes the last question of the entire study (phase 3 complete). Use {phase} for the phase number.', type: 'textarea' },
+  { key: 'bridge_instructions', label: 'Bridge Instructions', description: 'Optional instructions that help the companion connect a new topic to something the participant shared earlier. Each key is a question (lowercase), and the value is the bridging instruction added to the system prompt when context from prior answers exists.', type: 'string-map' },
+  { key: 'followup_variants_with_prompt', label: 'Follow-up Variants (with prompt)', description: 'Canned follow-up messages used when a participant gives a very short or generic answer to a specific question. These are cycled in order before the system falls back to LLM-based assessment.', type: 'string-list' },
+  { key: 'followup_variants_without_prompt', label: 'Follow-up Variants (without prompt)', description: 'Same as above, but used in free-form chat when there is no specific required question active.', type: 'string-list' },
 ];
 
 const INTERNAL_SECTIONS: SectionDef[] = [
-  { key: 'effort_assessment_system', label: 'Effort Assessment — System', type: 'textarea' },
-  { key: 'effort_assessment_user_template', label: 'Effort Assessment — User Template', type: 'textarea' },
-  { key: 'memory_extraction_system', label: 'Memory Extraction — System', type: 'textarea' },
-  { key: 'memory_extraction_user_template', label: 'Memory Extraction — User Template', type: 'textarea' },
+  { key: 'effort_assessment_system', label: 'Effort Assessment — System', description: 'System message for the LLM call that judges whether a participant\'s answer is sufficient or needs a follow-up question. Only fires after the canned follow-ups are exhausted.', type: 'textarea' },
+  { key: 'effort_assessment_user_template', label: 'Effort Assessment — User Template', description: 'The evaluation prompt sent to the LLM to assess effort and relevance. Use {last_assistant_prompt} and {user_response} as placeholders. Must return strict JSON.', type: 'textarea' },
+  { key: 'memory_extraction_system', label: 'Memory Extraction — System', description: 'System message for the LLM call that extracts factual memories from participant messages after each turn.', type: 'textarea' },
+  { key: 'memory_extraction_user_template', label: 'Memory Extraction — User Template', description: 'The extraction prompt that tells the LLM what to pull from the user\'s message. Use {user_message} and {existing_context} as placeholders.', type: 'textarea' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -208,7 +209,7 @@ function StudyChat() {
 // ---------------------------------------------------------------------------
 // Collapsible section wrapper
 // ---------------------------------------------------------------------------
-function Section({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
+function Section({ title, description, children, defaultOpen = false }: { title: string; description?: string; children: React.ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="border border-gray-200 rounded-xl overflow-hidden bg-white">
@@ -216,7 +217,12 @@ function Section({ title, children, defaultOpen = false }: { title: string; chil
         {title}
         <span className={`transform transition ${open ? 'rotate-180' : ''}`}>&#9662;</span>
       </button>
-      {open && <div className="px-4 py-3 space-y-3">{children}</div>}
+      {open && (
+        <div className="px-4 py-3 space-y-3">
+          {description && <p className="text-xs text-gray-500 leading-relaxed bg-blue-50/60 border border-blue-100 rounded-lg px-3 py-2">{description}</p>}
+          {children}
+        </div>
+      )}
     </div>
   );
 }
@@ -469,7 +475,7 @@ export default function PlaygroundPage() {
 
           <SectionGroup title="Conversation Prompts" subtitle="Directly shape what the participant sees and hears">
             {CONVERSATION_SECTIONS.map(sec => (
-              <Section key={sec.key} title={sec.label} defaultOpen={sec.key === 'guided_system_prompt'}>
+              <Section key={sec.key} title={sec.label} description={sec.description} defaultOpen={sec.key === 'guided_system_prompt'}>
                 {renderSection(sec)}
               </Section>
             ))}
@@ -477,7 +483,7 @@ export default function PlaygroundPage() {
 
           <SectionGroup title="Internal LLM Prompts" subtitle="Affect follow-up decisions and memory extraction (not directly visible to participants)">
             {INTERNAL_SECTIONS.map(sec => (
-              <Section key={sec.key} title={sec.label}>
+              <Section key={sec.key} title={sec.label} description={sec.description}>
                 {renderSection(sec)}
               </Section>
             ))}
