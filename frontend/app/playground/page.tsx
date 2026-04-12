@@ -1,10 +1,10 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { promptsAPI, PromptConfig, chatAPI, authAPI, sessionAPI, Message } from '@/lib/api';
+import { promptsAPI, PromptConfig, chatAPI, authAPI, sessionAPI, Message, PhaseStatus } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
-// Section config: maps config keys to human labels and field types
+// Section config — only prompts used in the guided study flow
 // ---------------------------------------------------------------------------
 interface SectionDef {
   key: keyof PromptConfig;
@@ -12,47 +12,61 @@ interface SectionDef {
   type: 'textarea' | 'string-list' | 'string-map' | 'phase-bank';
 }
 
-const SECTIONS: SectionDef[] = [
+const CONVERSATION_SECTIONS: SectionDef[] = [
   { key: 'phase_question_banks', label: 'Phase Question Banks', type: 'phase-bank' },
   { key: 'phase_opening_messages', label: 'Phase Opening Messages', type: 'string-map' },
   { key: 'guided_system_prompt', label: 'Guided Chat System Prompt', type: 'textarea' },
   { key: 'phase_completion_prompt', label: 'Phase Completion Prompt', type: 'textarea' },
-  { key: 'free_chat_prompt_extroverted', label: 'Free Chat Prompt (Extroverted)', type: 'textarea' },
-  { key: 'free_chat_prompt_neutral', label: 'Free Chat Prompt (Neutral)', type: 'textarea' },
   { key: 'bridge_instructions', label: 'Bridge Instructions', type: 'string-map' },
-  { key: 'effort_assessment_system', label: 'Effort Assessment — System', type: 'textarea' },
-  { key: 'effort_assessment_user_template', label: 'Effort Assessment — User Template', type: 'textarea' },
-  { key: 'memory_extraction_system', label: 'Memory Extraction — System', type: 'textarea' },
-  { key: 'memory_extraction_user_template', label: 'Memory Extraction — User Template', type: 'textarea' },
   { key: 'followup_variants_with_prompt', label: 'Follow-up Variants (with prompt)', type: 'string-list' },
   { key: 'followup_variants_without_prompt', label: 'Follow-up Variants (without prompt)', type: 'string-list' },
 ];
 
+const INTERNAL_SECTIONS: SectionDef[] = [
+  { key: 'effort_assessment_system', label: 'Effort Assessment — System', type: 'textarea' },
+  { key: 'effort_assessment_user_template', label: 'Effort Assessment — User Template', type: 'textarea' },
+  { key: 'memory_extraction_system', label: 'Memory Extraction — System', type: 'textarea' },
+  { key: 'memory_extraction_user_template', label: 'Memory Extraction — User Template', type: 'textarea' },
+];
+
 // ---------------------------------------------------------------------------
-// Mini test-chat component (self-contained, no memory/phase overhead)
+// Study-simulation test chat
 // ---------------------------------------------------------------------------
-function TestChat() {
+function StudyChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [phase, setPhase] = useState<number>(1);
+  const [phaseStatus, setPhaseStatus] = useState<PhaseStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const bootstrap = useCallback(async () => {
     setError(null);
+    setBootstrapping(true);
+    setMessages([]);
+    setPhaseStatus(null);
+    setUserId(null);
+    setSessionId(null);
     try {
-      const ts = Date.now();
-      const user = await authAPI.register(`playground_${ts}`, `pw_${ts}`, 'SESSION_AUTO');
-      const session = await sessionAPI.create(user.user_id);
-      setUserId(user.user_id);
-      setSessionId(session.session_id);
-      setMessages([]);
+      const qualtricsId = `playground_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const auth = await authAPI.qualtricsAuthenticate(qualtricsId, qualtricsId, null);
+      const uid = auth.user_id;
+      const sid = auth.session_id;
+      setUserId(uid);
+      setSessionId(sid);
+
+      const msgs: Message[] = await sessionAPI.getMessages(sid);
+      setMessages(msgs);
+
+      const progress = await chatAPI.getProgress(uid, sid);
+      setPhaseStatus(progress);
     } catch (e: any) {
       setError(`Failed to create test session: ${e.message}`);
     }
+    setBootstrapping(false);
   }, []);
 
   useEffect(() => { bootstrap(); }, [bootstrap]);
@@ -63,38 +77,79 @@ function TestChat() {
     if (!input.trim() || loading || !userId || !sessionId) return;
     const text = input;
     setInput('');
-    setMessages(prev => [...prev, { msg_id: '', session_id: sessionId!, role: 'user', content: text, created_at: new Date().toISOString() }]);
+    const userMsg: Message = { msg_id: '', session_id: sessionId, role: 'user', content: text, created_at: new Date().toISOString() };
+    setMessages(prev => [...prev, userMsg]);
     setLoading(true);
     try {
-      const resp = await chatAPI.send(userId, sessionId, text, phase);
-      setMessages(prev => [...prev, { msg_id: '', session_id: sessionId!, role: 'assistant', content: resp.response, created_at: new Date().toISOString() }]);
+      const resp = await chatAPI.send(userId, sessionId, text, null);
+      const assistantMsg: Message = { msg_id: '', session_id: sessionId, role: 'assistant', content: resp.response, created_at: new Date().toISOString() };
+      setMessages(prev => [...prev, assistantMsg]);
+      if (resp.phase_status) {
+        setPhaseStatus(resp.phase_status);
+      }
     } catch (e: any) {
-      setMessages(prev => [...prev, { msg_id: '', session_id: sessionId!, role: 'assistant', content: `Error: ${e.message}`, created_at: new Date().toISOString() }]);
+      setMessages(prev => [...prev, { msg_id: '', session_id: sessionId, role: 'assistant', content: `Error: ${e.message}`, created_at: new Date().toISOString() }]);
     }
     setLoading(false);
   };
+
+  const handleAdvancePhase = async () => {
+    if (!userId || !sessionId) return;
+    setLoading(true);
+    try {
+      const resp = await chatAPI.advancePhase(userId, sessionId);
+      const openingMsg: Message = { msg_id: '', session_id: sessionId, role: 'assistant', content: resp.opening_message, created_at: new Date().toISOString() };
+      setMessages(prev => [...prev, openingMsg]);
+      setPhaseStatus(resp.phase_status);
+    } catch (e: any) {
+      setError(`Failed to advance phase: ${e.message}`);
+    }
+    setLoading(false);
+  };
+
+  const phaseComplete = phaseStatus?.phase_complete ?? false;
+  const studyComplete = phaseStatus?.study_complete ?? false;
+  const showContinue = phaseComplete && !studyComplete;
+  const chatDisabled = loading || !sessionId || studyComplete || showContinue;
+
+  const progressLabel = (() => {
+    if (!phaseStatus) return null;
+    if (studyComplete) return 'Study Complete';
+    const qIdx = (phaseStatus.current_prompt_index ?? phaseStatus.prompts_answered) + 1;
+    if (phaseComplete) return `Phase ${phaseStatus.phase} Complete`;
+    return `Phase ${phaseStatus.phase} — Question ${qIdx}/${phaseStatus.total_prompts}`;
+  })();
 
   return (
     <div className="flex flex-col h-full">
       {/* toolbar */}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 bg-white/90 shrink-0">
-        <label className="text-xs font-medium text-gray-600">Phase:</label>
-        <select value={phase} onChange={e => setPhase(Number(e.target.value))} className="text-xs border rounded px-2 py-1">
-          <option value={1}>1</option>
-          <option value={2}>2</option>
-          <option value={3}>3</option>
-        </select>
-        <button type="button" onClick={bootstrap} className="ml-auto text-xs px-3 py-1 rounded-full bg-gray-100 hover:bg-gray-200 transition">
+        <span className="text-xs font-semibold text-gray-700">Study Simulation</span>
+        <button type="button" onClick={bootstrap} disabled={bootstrapping} className="ml-auto text-xs px-3 py-1 rounded-full bg-gray-100 hover:bg-gray-200 transition disabled:opacity-50">
           New Session
         </button>
       </div>
 
-      {error && <div className="px-4 py-2 text-xs text-red-600 bg-red-50">{error}</div>}
+      {/* phase progress */}
+      {progressLabel && (
+        <div className={`px-4 py-2 text-xs font-medium border-b shrink-0 ${
+          studyComplete ? 'bg-green-50 text-green-700 border-green-200' :
+          phaseComplete ? 'bg-amber-50 text-amber-700 border-amber-200' :
+          'bg-blue-50 text-blue-700 border-blue-200'
+        }`}>
+          {progressLabel}
+        </div>
+      )}
+
+      {error && <div className="px-4 py-2 text-xs text-red-600 bg-red-50 shrink-0">{error}</div>}
 
       {/* messages */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-        {messages.length === 0 && !loading && (
-          <p className="text-center text-gray-400 text-sm mt-8">Send a message to test the current prompts.</p>
+        {bootstrapping && (
+          <p className="text-center text-gray-400 text-sm mt-8">Setting up study session...</p>
+        )}
+        {!bootstrapping && messages.length === 0 && (
+          <p className="text-center text-gray-400 text-sm mt-8">No messages yet.</p>
         )}
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -115,16 +170,36 @@ function TestChat() {
         <div ref={bottomRef} />
       </div>
 
+      {/* continue / finish banner */}
+      {showContinue && (
+        <div className="px-4 py-3 border-t border-amber-200 bg-amber-50 shrink-0">
+          <button
+            type="button"
+            onClick={handleAdvancePhase}
+            disabled={loading}
+            className="w-full py-2 px-4 rounded-full bg-[#d4c5a9] text-black font-semibold text-sm hover:bg-[#c9b99b] transition disabled:opacity-50"
+          >
+            Continue to Phase {(phaseStatus?.phase ?? 0) + 1}
+          </button>
+        </div>
+      )}
+
+      {studyComplete && (
+        <div className="px-4 py-3 border-t border-green-200 bg-green-50 text-center shrink-0">
+          <p className="text-sm font-medium text-green-700">All phases complete. Click "New Session" to test again.</p>
+        </div>
+      )}
+
       {/* input */}
       <form onSubmit={send} className="border-t border-gray-200 bg-white/90 p-3 flex gap-2 shrink-0">
         <input
           value={input}
           onChange={e => setInput(e.target.value)}
-          placeholder="Type a test message..."
-          disabled={loading || !sessionId}
-          className="flex-1 px-4 py-2 text-sm rounded-full border border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#d4c5a9]"
+          placeholder={chatDisabled && !loading ? (studyComplete ? 'Study complete' : 'Phase complete — click Continue') : 'Type a message...'}
+          disabled={chatDisabled}
+          className="flex-1 px-4 py-2 text-sm rounded-full border border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#d4c5a9] disabled:bg-gray-100"
         />
-        <button type="submit" disabled={loading || !input.trim()} className="lavender-btn text-sm disabled:opacity-50">Send</button>
+        <button type="submit" disabled={chatDisabled || !input.trim()} className="lavender-btn text-sm disabled:opacity-50">Send</button>
       </form>
     </div>
   );
@@ -142,6 +217,21 @@ function Section({ title, children, defaultOpen = false }: { title: string; chil
         <span className={`transform transition ${open ? 'rotate-180' : ''}`}>&#9662;</span>
       </button>
       {open && <div className="px-4 py-3 space-y-3">{children}</div>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Section group header
+// ---------------------------------------------------------------------------
+function SectionGroup({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-2">
+        <h3 className="text-sm font-bold text-gray-700">{title}</h3>
+        <p className="text-xs text-gray-400">{subtitle}</p>
+      </div>
+      <div className="space-y-3">{children}</div>
     </div>
   );
 }
@@ -171,13 +261,11 @@ export default function PlaygroundPage() {
 
   const flash = (msg: string) => { setStatus(msg); setTimeout(() => setStatus(null), 3000); };
 
-  // Update a top-level string field
   const updateField = (key: keyof PromptConfig, value: any) => {
     setConfig(prev => prev ? { ...prev, [key]: value } : prev);
     setDirty(true);
   };
 
-  // Apply (PUT to server, in-memory only)
   const handleApply = async () => {
     if (!config) return;
     setSaving(true);
@@ -190,7 +278,6 @@ export default function PlaygroundPage() {
     setSaving(false);
   };
 
-  // Save to disk
   const handleSave = async () => {
     if (!config) return;
     setSaving(true);
@@ -203,7 +290,6 @@ export default function PlaygroundPage() {
     setSaving(false);
   };
 
-  // Reset
   const handleReset = async () => {
     if (!confirm('Discard all in-memory changes and revert to saved defaults?')) return;
     setSaving(true);
@@ -217,7 +303,7 @@ export default function PlaygroundPage() {
   };
 
   // ---------------------------------------------------------------------------
-  // Render helpers for different field types
+  // Render helpers
   // ---------------------------------------------------------------------------
   const renderTextarea = (key: keyof PromptConfig) => {
     const val = (config as any)?.[key] ?? '';
@@ -375,22 +461,32 @@ export default function PlaygroundPage() {
       {/* split pane */}
       <div className="flex-1 flex overflow-hidden">
         {/* left: editor */}
-        <div className="w-1/2 border-r border-gray-200 overflow-y-auto p-5 space-y-3 bg-gray-50/30">
-          <p className="text-xs text-gray-500 mb-2">
-            Edit any prompt below, then click <strong>Apply</strong> to test it in the chat on the right.
-            Click <strong>Save to Server</strong> to persist across restarts.
+        <div className="w-1/2 border-r border-gray-200 overflow-y-auto p-5 space-y-6 bg-gray-50/30">
+          <p className="text-xs text-gray-500 mb-1">
+            Edit prompts below, click <strong>Apply</strong>, then test in the study simulation on the right.
             Template variables like <code className="bg-gray-100 px-1 rounded">{'{condition}'}</code>, <code className="bg-gray-100 px-1 rounded">{'{phase}'}</code>, <code className="bg-gray-100 px-1 rounded">{'{first_question}'}</code> are filled at runtime.
           </p>
-          {SECTIONS.map(sec => (
-            <Section key={sec.key} title={sec.label} defaultOpen={sec.key === 'guided_system_prompt'}>
-              {renderSection(sec)}
-            </Section>
-          ))}
+
+          <SectionGroup title="Conversation Prompts" subtitle="Directly shape what the participant sees and hears">
+            {CONVERSATION_SECTIONS.map(sec => (
+              <Section key={sec.key} title={sec.label} defaultOpen={sec.key === 'guided_system_prompt'}>
+                {renderSection(sec)}
+              </Section>
+            ))}
+          </SectionGroup>
+
+          <SectionGroup title="Internal LLM Prompts" subtitle="Affect follow-up decisions and memory extraction (not directly visible to participants)">
+            {INTERNAL_SECTIONS.map(sec => (
+              <Section key={sec.key} title={sec.label}>
+                {renderSection(sec)}
+              </Section>
+            ))}
+          </SectionGroup>
         </div>
 
-        {/* right: test chat */}
+        {/* right: study simulation chat */}
         <div className="w-1/2 flex flex-col">
-          <TestChat />
+          <StudyChat />
         </div>
       </div>
     </div>
