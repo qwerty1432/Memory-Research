@@ -1,5 +1,6 @@
 import os
 import json
+from typing import Literal
 from . import prompt_store
 
 
@@ -62,6 +63,16 @@ def build_phase_guided_messages(
         if bridge_instruction:
             messages.append({"role": "system", "content": bridge_instruction})
     messages.append({"role": "system", "content": progress_prompt})
+    messages.append(
+        {
+            "role": "system",
+            "content": (
+                "Scope: The only new substantive topic you may introduce is the single line "
+                "quoted in the internal block above. Do not preview, reference, or allude to "
+                "any other upcoming interview topics that are not in that line."
+            ),
+        }
+    )
     messages.append({"role": "user", "content": user_message})
     return messages
 
@@ -101,6 +112,123 @@ def build_messages(context: str, user_message: str) -> list[dict]:
 
     messages.append({"role": "user", "content": user_message})
     return messages
+
+
+def user_requests_skip_topic(user_message: str) -> bool:
+    """
+    True if the participant clearly wants to skip the current topic / not answer.
+    Checked before generic short-answer follow-ups so 'skip' is not treated as vague.
+    """
+    s = (user_message or "").strip().lower()
+    if not s:
+        return False
+    if s in {
+        "skip",
+        "pass",
+        "next",
+        "next question",
+        "skip this",
+        "skip this question",
+        "skip question",
+        "n/a",
+        "na",
+        "no comment",
+        "no answer",
+    }:
+        return True
+    if "next question" in s or "move on" in s or "skip this" in s:
+        return True
+    if "don't want to answer" in s or "dont want to answer" in s:
+        return True
+    if "rather not" in s and ("answer" in s or "say" in s or "share" in s):
+        return True
+    return False
+
+
+def user_message_suggests_ambiguous_skip(user_message: str) -> bool:
+    """
+    True when the participant may want to skip/move on, but did not say so clearly
+    enough for user_requests_skip_topic. Used to ask a one-time skip vs continue check.
+    Not triggered for very short generic replies (those get normal nudges instead).
+    """
+    if user_requests_skip_topic(user_message):
+        return False
+    s = (user_message or "").strip().lower()
+    if not s or len(s) < 8:
+        return False
+    hints = (
+        "rather not",
+        "prefer not to",
+        "uncomfortable",
+        "something else",
+        "different question",
+        "another question",
+        "another topic",
+        "different topic",
+        "not interested in this",
+        "not interested in that",
+        "don't want to get into",
+        "dont want to get into",
+        "don't want to talk about",
+        "dont want to talk about",
+        "can we skip",
+        "can we move",
+        "change the subject",
+        "talk about something else",
+        "don't know if i want",
+        "dont know if i want",
+        "not sure i want to answer",
+        "hard to answer this",
+        "don't feel comfortable",
+        "dont feel comfortable",
+        "pass on this",
+        "leave this one",
+    )
+    return any(h in s for h in hints)
+
+
+def get_skip_confirmation_prompt_text() -> str:
+    cfg = prompt_store.get_config()
+    default = (
+        "I'm not totally sure I understood — were you hoping to move on to the **next "
+        "question**, or would you like to **stay on this one** and share more when you're "
+        "ready? Either is fine. You can say **next** to skip, or **keep going** to stay."
+    )
+    return str(cfg.get("skip_confirmation_prompt") or default).strip() or default
+
+
+def classify_skip_confirmation_reply(user_message: str) -> Literal["advance", "continue", "unclear"]:
+    """
+    After we asked skip vs continue, interpret the participant's reply.
+    """
+    if user_requests_skip_topic(user_message):
+        return "advance"
+    s = (user_message or "").strip().lower()
+    if not s:
+        return "unclear"
+    # Bare affirmatives are ambiguous (we offered both skip and stay); fall through to normal handling.
+    if s in {"no", "nah", "nope", "n"}:
+        return "continue"
+    if "go ahead" in s or "the next one" in s or "next question" in s or "skip it" in s:
+        return "advance"
+    if "don't skip" in s or "dont skip" in s or "not skip" in s:
+        return "continue"
+    if (
+        "keep going" in s
+        or "stay on" in s
+        or "stay here" in s
+        or "this question" in s
+        or "this topic" in s
+        or "same question" in s
+        or "want to continue" in s
+        or "rather stay" in s
+    ):
+        return "continue"
+    if s == "next" or s.startswith("next ") or s.endswith(" next"):
+        return "advance"
+    if s in {"keep", "stay", "continue"}:
+        return "continue"
+    return "unclear"
 
 
 def _is_generic_or_too_short(user_message: str, *, min_words: int) -> bool:
@@ -203,6 +331,7 @@ async def maybe_build_followup_override(
     current_required_prompt: str | None = None,
     followups_used_for_prompt: int = 0,
     used_followups_for_prompt: list[str] | None = None,
+    skip_confirmation_sent: bool = False,
 ) -> tuple[str | None, dict | None]:
     """
     Evaluate sufficiency of user response and optionally return a follow-up question.
@@ -217,6 +346,27 @@ async def maybe_build_followup_override(
     max_followups = 3
     used_followups = [s.strip().lower() for s in (used_followups_for_prompt or []) if str(s).strip()]
     min_words = 5
+
+    if user_requests_skip_topic(user_message):
+        return None, {
+            "relevance_score": 2,
+            "effort_score": 2,
+            "needs_followup": False,
+            "followup_question": "",
+            "user_skip": True,
+        }
+
+    if not skip_confirmation_sent and user_message_suggests_ambiguous_skip(user_message):
+        followup_text = get_skip_confirmation_prompt_text()
+        return followup_text, {
+            "relevance_score": 2,
+            "effort_score": 2,
+            "needs_followup": True,
+            "followup_question": followup_text,
+            "rule_based": True,
+            "skip_confirmation_issued": True,
+        }
+
     if _is_generic_or_too_short(user_message, min_words=min_words):
         if followups_used_for_prompt < max_followups:
             if current_required_prompt:

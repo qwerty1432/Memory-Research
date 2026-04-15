@@ -93,6 +93,8 @@ def advance_phase(
         used_followups_for_prompt=used_followups_for_prompt,
         phase_complete=phase_complete,
         study_complete=study_complete,
+        pending_skip_confirmation=False,
+        skip_confirmation_sent=False,
     )
 
     phase_prompts = prompt_builder.get_phase_prompts(current_phase)
@@ -165,6 +167,8 @@ def _get_progress_state(db: DBSession, user_id: UUID, session_id: UUID) -> dict:
             "used_followups_for_prompt": progress.get("used_followups_for_prompt", []) or [],
             "phase_complete": progress.get("phase_complete", False),
             "study_complete": progress.get("study_complete", False),
+            "pending_skip_confirmation": progress.get("pending_skip_confirmation", False),
+            "skip_confirmation_sent": progress.get("skip_confirmation_sent", False),
         }
     # Default: start at phase 1, prompt 0
     return {
@@ -174,6 +178,8 @@ def _get_progress_state(db: DBSession, user_id: UUID, session_id: UUID) -> dict:
         "used_followups_for_prompt": [],
         "phase_complete": False,
         "study_complete": False,
+        "pending_skip_confirmation": False,
+        "skip_confirmation_sent": False,
     }
 
 
@@ -188,6 +194,8 @@ def _update_progress_state(
     used_followups_for_prompt: list[str],
     phase_complete: bool,
     study_complete: bool,
+    pending_skip_confirmation: bool = False,
+    skip_confirmation_sent: bool = False,
 ):
     """Update progress state and log it."""
     logging.log_progress_update(
@@ -200,6 +208,8 @@ def _update_progress_state(
         used_followups_for_prompt=used_followups_for_prompt,
         phase_complete=phase_complete,
         study_complete=study_complete,
+        pending_skip_confirmation=pending_skip_confirmation,
+        skip_confirmation_sent=skip_confirmation_sent,
     )
 
 
@@ -234,6 +244,8 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
         used_followups_for_prompt = progress["used_followups_for_prompt"]
         phase_complete = progress["phase_complete"]
         study_complete = progress["study_complete"]
+        pending_skip_confirmation = progress["pending_skip_confirmation"]
+        skip_confirmation_sent = progress["skip_confirmation_sent"]
     else:
         # Legacy mode: use explicit phase
         current_phase = request.phase
@@ -273,15 +285,58 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
     t_start = time.time()
     followup_override = None
     effort_result = None
+    ran_followup_check = False
     if is_single_block_mode and not study_complete and current_required_prompt:
         t_effort = time.time()
-        followup_override, effort_result = await prompt_builder.maybe_build_followup_override(
-            last_assistant.content if last_assistant else None,
-            request.message,
-            current_required_prompt=current_required_prompt,
-            followups_used_for_prompt=followups_used,
-            used_followups_for_prompt=used_followups_for_prompt,
-        )
+        if pending_skip_confirmation:
+            ran_followup_check = True
+            decision = prompt_builder.classify_skip_confirmation_reply(request.message)
+            if decision == "advance":
+                followup_override = None
+                effort_result = {
+                    "relevance_score": 2,
+                    "effort_score": 2,
+                    "needs_followup": False,
+                    "followup_question": "",
+                    "user_skip": True,
+                }
+                pending_skip_confirmation = False
+                skip_confirmation_sent = False
+            elif decision == "continue":
+                followup_override = None
+                effort_result = {
+                    "relevance_score": 2,
+                    "effort_score": 2,
+                    "needs_followup": False,
+                    "followup_question": "",
+                    "resume_after_skip_prompt": True,
+                }
+                pending_skip_confirmation = False
+            else:
+                pending_skip_confirmation = False
+                followup_override, effort_result = await prompt_builder.maybe_build_followup_override(
+                    last_assistant.content if last_assistant else None,
+                    request.message,
+                    current_required_prompt=current_required_prompt,
+                    followups_used_for_prompt=followups_used,
+                    used_followups_for_prompt=used_followups_for_prompt,
+                    skip_confirmation_sent=skip_confirmation_sent,
+                )
+        else:
+            followup_override, effort_result = await prompt_builder.maybe_build_followup_override(
+                last_assistant.content if last_assistant else None,
+                request.message,
+                current_required_prompt=current_required_prompt,
+                followups_used_for_prompt=followups_used,
+                used_followups_for_prompt=used_followups_for_prompt,
+                skip_confirmation_sent=skip_confirmation_sent,
+            )
+            ran_followup_check = True
+
+        if effort_result and effort_result.get("skip_confirmation_issued"):
+            pending_skip_confirmation = True
+            skip_confirmation_sent = True
+
         print(f"[Chat] effort_check: {time.time()-t_effort:.1f}s | override={'yes' if followup_override else 'no'}")
         if effort_result is not None:
             logging.log_effort_check(
@@ -304,18 +359,26 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
             should_advance_prompt = False
             followup_override = None
             effort_result = None
+            pending_skip_confirmation = False
         else:
         
             # Determine if we should advance to next prompt or phase
             should_advance_prompt = False
             if followup_override is None:
                 # No follow-up override - check if response was sufficient
-                if effort_result is None:
-                    # No evaluation done (not in guided mode or error) - assume sufficient
-                    should_advance_prompt = True
+                if not ran_followup_check:
+                    # No required prompt / follow-up path ran — do not advance (avoids spurious jumps)
+                    should_advance_prompt = False
+                elif effort_result is None:
+                    # Defensive: should not happen after maybe_build_followup_override
+                    should_advance_prompt = False
                 elif not effort_result.get("needs_followup", False):
-                    # Response is sufficient - advance
-                    should_advance_prompt = True
+                    # Sufficient answer, explicit skip, or "keep going" after a skip check — advance
+                    # only when they are not explicitly staying on the same prompt.
+                    if effort_result.get("resume_after_skip_prompt"):
+                        should_advance_prompt = False
+                    else:
+                        should_advance_prompt = True
                 elif effort_result.get("followup_cap_reached", False):
                     # Hit follow-up cap - force advance even if insufficient
                     should_advance_prompt = True
@@ -326,6 +389,8 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                 current_prompt_index += 1
                 followups_used = 0  # Reset follow-up counter for new prompt
                 used_followups_for_prompt = []
+                pending_skip_confirmation = False
+                skip_confirmation_sent = False
                 
                 # Check if phase is complete
                 if current_prompt_index >= total_prompts:
@@ -353,6 +418,8 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
             used_followups_for_prompt=used_followups_for_prompt,
             phase_complete=phase_complete,
             study_complete=study_complete,
+            pending_skip_confirmation=pending_skip_confirmation,
+            skip_confirmation_sent=skip_confirmation_sent,
         )
         
         # Build phase status
@@ -462,7 +529,7 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
     else:
         t_llm = time.time()
         try:
-            response_text = await call_genai(messages, stream=False, max_tokens=400)
+            response_text = await call_genai(messages, stream=False, max_tokens=768)
             print(f"[Chat] response: LLM ok in {time.time()-t_llm:.1f}s")
         except Exception as e:
             error_msg = str(e)
@@ -470,7 +537,7 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
             logging.log_error(db, "error_chat_api", request.user_id, f"First attempt: {error_msg}")
             t_retry = time.time()
             try:
-                response_text = await call_genai(messages, stream=False, max_tokens=400)
+                response_text = await call_genai(messages, stream=False, max_tokens=768)
                 print(f"[Chat] response: LLM retry ok in {time.time()-t_retry:.1f}s")
             except Exception as retry_error:
                 error_msg = str(retry_error)

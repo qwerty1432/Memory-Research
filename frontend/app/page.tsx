@@ -350,7 +350,8 @@ export default function Home() {
                 ) : (
                   <span>
                     {' '}
-                    - Question {(phaseProgress.current_prompt_index ?? phaseProgress.prompts_answered) + 1}/{phaseProgress.total_prompts}
+                    - Topic {(phaseProgress.current_prompt_index ?? phaseProgress.prompts_answered) + 1}/{phaseProgress.total_prompts}
+                    {(phaseProgress.followups_used_for_prompt ?? 0) > 0 ? ' (follow-up)' : ''}
                   </span>
                 )}
               </p>

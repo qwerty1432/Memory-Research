@@ -117,8 +117,10 @@ function StudyChat() {
     if (!phaseStatus) return null;
     if (studyComplete) return 'Study Complete';
     const qIdx = (phaseStatus.current_prompt_index ?? phaseStatus.prompts_answered) + 1;
+    const fu = phaseStatus.followups_used_for_prompt ?? 0;
+    const clarifying = fu > 0 ? ' — clarifying follow-up' : '';
     if (phaseComplete) return `Phase ${phaseStatus.phase} Complete`;
-    return `Phase ${phaseStatus.phase} — Question ${qIdx}/${phaseStatus.total_prompts}`;
+    return `Phase ${phaseStatus.phase} — Topic ${qIdx}/${phaseStatus.total_prompts}${clarifying}`;
   })();
 
   return (

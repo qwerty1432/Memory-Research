@@ -178,10 +178,13 @@ def log_progress_update(
     used_followups_for_prompt: list[str] | None = None,
     phase_complete: bool,
     study_complete: bool,
+    pending_skip_confirmation: bool = False,
+    skip_confirmation_sent: bool = False,
 ):
     """
     Log progress state update for single-block multi-phase flow.
-    Stores: current_phase, current_prompt_index, followups_used_for_prompt, phase_complete, study_complete.
+    Stores: current_phase, current_prompt_index, followups_used_for_prompt, phase_complete,
+    study_complete, pending_skip_confirmation, skip_confirmation_sent.
     """
     payload = {
         "session_id": str(session_id),
@@ -191,6 +194,8 @@ def log_progress_update(
         "used_followups_for_prompt": used_followups_for_prompt or [],
         "phase_complete": phase_complete,
         "study_complete": study_complete,
+        "pending_skip_confirmation": pending_skip_confirmation,
+        "skip_confirmation_sent": skip_confirmation_sent,
     }
     log_event(db, "progress_update", user_id, payload)
 
@@ -202,7 +207,8 @@ def get_latest_progress(
 ) -> dict | None:
     """
     Get the latest progress state for a session.
-    Returns dict with: current_phase, current_prompt_index, followups_used_for_prompt, phase_complete, study_complete.
+    Returns dict with: current_phase, current_prompt_index, followups_used_for_prompt, phase_complete,
+    study_complete, pending_skip_confirmation, skip_confirmation_sent.
     Returns None if no progress found.
     """
     events = (
