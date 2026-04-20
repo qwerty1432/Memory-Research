@@ -150,6 +150,91 @@ def _normalize_assessment_outcome(raw: str) -> str:
     return aliases.get(s, s)
 
 
+def _normalize_text_for_match(text: str) -> str:
+    text = (text or "").strip().lower()
+    text = re.sub(r"[\W_]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _strip_leading_echo_prefix(followup_question: str, current_required_prompt: str) -> str:
+    """
+    Remove lead-ins that restate the full current prompt, e.g.:
+    - "Regarding <prompt>, ..."
+    - "About <prompt>: ..."
+    """
+    fq = (followup_question or "").strip()
+    prompt = (current_required_prompt or "").strip()
+    if not fq or not prompt:
+        return fq
+
+    # Remove generic lead-in token first.
+    fq = re.sub(
+        r"^\s*(?:regarding|about|on|re|for|as for)\b[\s,:-]*",
+        "",
+        fq,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    # If the exact topic appears right at the beginning, strip it.
+    exact_match = re.search(re.escape(prompt), fq, flags=re.IGNORECASE)
+    if exact_match and exact_match.start() <= 3:
+        fq = fq[exact_match.end() :].lstrip(" ,:.-")
+        return fq.strip()
+
+    prompt_norm = _normalize_text_for_match(prompt)
+    if not prompt_norm:
+        return fq
+
+    patterns = [
+        r"^\s*(?:regarding|about|on|re)\s+(.+?)(?:,\s*|:\s*|-\s*|\.\s+)",
+        r"^\s*(?:for|as for)\s+(.+?)(?:,\s*|:\s*|-\s*|\.\s+)",
+    ]
+    for pattern in patterns:
+        m = re.match(pattern, fq, flags=re.IGNORECASE)
+        if not m:
+            continue
+        lead_topic = m.group(1).strip(" \"'`")
+        lead_norm = _normalize_text_for_match(lead_topic)
+        if lead_norm and (lead_norm in prompt_norm or prompt_norm in lead_norm):
+            fq = fq[m.end() :].strip()
+            break
+    return fq
+
+
+def _normalize_guided_followup_question(
+    followup_question: str,
+    current_required_prompt: str | None,
+) -> str:
+    """
+    Reduce echoed topic restatements so follow-ups stay concise.
+    """
+    fq = (followup_question or "").strip()
+    if not fq:
+        return ""
+    if not current_required_prompt:
+        return fq
+
+    topic = current_required_prompt.strip()
+    if not topic:
+        return fq
+
+    fq = _strip_leading_echo_prefix(fq, topic)
+    if not fq:
+        return ""
+
+    fq_norm = _normalize_text_for_match(fq)
+    topic_norm = _normalize_text_for_match(topic)
+    if not fq_norm or not topic_norm:
+        return fq
+
+    # If the follow-up is mostly the topic restatement with little/no new content, drop it.
+    if topic_norm in fq_norm:
+        extra = fq_norm.replace(topic_norm, "").strip()
+        if len(extra) < 12:
+            return ""
+    return fq
+
+
 def _fallback_unified_state(
     guided_mode: bool,
     pending_skip_confirmation: bool,
@@ -382,9 +467,10 @@ async def maybe_build_followup_override(
 
     if outcome == "needs_clarifying_followup":
         followup_question = (state.get("followup_question") or "").strip()
-        if guided_mode and current_required_prompt:
-            if followup_question and current_required_prompt.lower() not in followup_question.lower():
-                followup_question = f"Regarding {current_required_prompt.lower()}, {followup_question}"
+        if guided_mode:
+            followup_question = _normalize_guided_followup_question(
+                followup_question, current_required_prompt
+            )
         normalized = followup_question.strip().lower()
         if normalized in used_followups:
             if current_required_prompt:
