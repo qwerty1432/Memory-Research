@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, Boolean, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, String, Text, Boolean, DateTime, ForeignKey, JSON, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -56,6 +56,8 @@ class Memory(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.session_id", ondelete="SET NULL"), nullable=True)
     text = Column(Text, nullable=False)
+    # Study phase (1–3) when the memory was created; NULL for legacy rows or manual creates without phase.
+    phase = Column(Integer, nullable=True)
     is_active = Column(Boolean, default=False, nullable=False)  # False = candidate, True = approved
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -91,6 +91,7 @@ class MemoryResponse(BaseModel):
     user_id: UUID
     session_id: Optional[UUID] = None
     text: str
+    phase: Optional[int] = None  # 1–3 when set; null for legacy rows
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime] = None

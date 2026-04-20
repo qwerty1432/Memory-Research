@@ -76,7 +76,7 @@ nano ~/app/backend/.env
 Set these values:
 - `GENAI_API_KEY` → one Purdue GenAI key, **or** use multiple keys (comma-separated) to spread rate limits:  
   `GENAI_API_KEYS=sk-first,sk-second` (preferred when several researchers each have a key)
-- `GENAI_MODEL` → optional; default is `gpt-oss:latest` (RCAC keeps this model hot; older models may cold-load). Override with e.g. `llama4:latest` if your project prefers it.
+- Model id → **`llama4:latest`**, fixed in application code (`backend/app/genai_client.py`). Not set via `.env`.
 - `SECRET_KEY` → generate with: `python3 -c "import secrets; print(secrets.token_hex(32))"`
 - Everything else is pre-configured
 
@@ -224,8 +224,8 @@ tail -50 ~/logs/backend.log
 # Test connectivity from server
 curl -sI https://genai.rcac.purdue.edu
 
-# Check keys / model are set (do not paste keys in chat)
-grep -E 'GENAI_API_KEY|GENAI_API_KEYS|GENAI_MODEL' ~/app/backend/.env
+# Check keys are set (do not paste keys in chat). Model is llama4:latest in app code.
+grep -E 'GENAI_API_KEY|GENAI_API_KEYS' ~/app/backend/.env
 ```
 
 Each outbound GenAI call uses the next key in round-robin when multiple keys are configured. Per-key rate limits (e.g. 200/min) apply separately to each key.

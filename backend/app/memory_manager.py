@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, or_
 from .models import Memory, Session as SessionModel, Message
 from typing import List, Optional
 from uuid import UUID
@@ -198,14 +198,54 @@ def check_memory_duplicate(
     return False
 
 
+def get_memory_recap(
+    user_id: UUID,
+    session_id: UUID,
+    until_phase: int,
+    condition_id: str,
+    db: Session,
+) -> List[Memory]:
+    """
+    Active memories for phase-end recap.
+
+    SESSION_*: current session only, phase == until_phase. Rows with phase NULL are excluded.
+    PERSISTENT_*: user-wide active memories with phase <= until_phase, or phase IS NULL (legacy).
+    """
+    if until_phase not in (1, 2, 3):
+        return []
+
+    normalized_user_id = _ensure_uuid(user_id)
+    normalized_session_id = _ensure_uuid(session_id)
+
+    q = db.query(Memory).filter(
+        Memory.user_id == normalized_user_id,
+        Memory.is_active == True,
+    )
+
+    if condition_id in ("SESSION_AUTO", "SESSION_USER"):
+        q = q.filter(
+            Memory.session_id == normalized_session_id,
+            Memory.phase == until_phase,
+        )
+    elif condition_id in ("PERSISTENT_AUTO", "PERSISTENT_USER"):
+        q = q.filter(
+            or_(Memory.phase.is_(None), Memory.phase <= until_phase),
+        )
+    else:
+        return []
+
+    return q.order_by(desc(Memory.created_at)).all()
+
+
 def create_memory_candidate(
     user_id: UUID,
     session_id: Optional[UUID],
     text: str,
     db: Session,
     is_active: bool = False,
+    phase: Optional[int] = None,
 ) -> Memory:
-    """Create a new memory candidate (inactive by default)"""
+    """Create a new memory candidate (inactive by default). ``phase`` is the study phase (1–3) when extracted from chat."""
     normalized_user_id = _ensure_uuid(user_id)
     normalized_session_id = _ensure_uuid(session_id)
 
@@ -213,7 +253,8 @@ def create_memory_candidate(
         user_id=normalized_user_id,
         session_id=normalized_session_id,
         text=text[:200],  # Enforce 200 char limit
-        is_active=is_active
+        is_active=is_active,
+        phase=phase if phase in (1, 2, 3) else None,
     )
     db.add(memory)
     db.commit()

@@ -288,54 +288,24 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
     ran_followup_check = False
     if is_single_block_mode and not study_complete and current_required_prompt:
         t_effort = time.time()
-        if pending_skip_confirmation:
-            ran_followup_check = True
-            decision = prompt_builder.classify_skip_confirmation_reply(request.message)
-            if decision == "advance":
-                followup_override = None
-                effort_result = {
-                    "relevance_score": 2,
-                    "effort_score": 2,
-                    "needs_followup": False,
-                    "followup_question": "",
-                    "user_skip": True,
-                }
-                pending_skip_confirmation = False
-                skip_confirmation_sent = False
-            elif decision == "continue":
-                followup_override = None
-                effort_result = {
-                    "relevance_score": 2,
-                    "effort_score": 2,
-                    "needs_followup": False,
-                    "followup_question": "",
-                    "resume_after_skip_prompt": True,
-                }
-                pending_skip_confirmation = False
-            else:
-                pending_skip_confirmation = False
-                followup_override, effort_result = await prompt_builder.maybe_build_followup_override(
-                    last_assistant.content if last_assistant else None,
-                    request.message,
-                    current_required_prompt=current_required_prompt,
-                    followups_used_for_prompt=followups_used,
-                    used_followups_for_prompt=used_followups_for_prompt,
-                    skip_confirmation_sent=skip_confirmation_sent,
-                )
-        else:
-            followup_override, effort_result = await prompt_builder.maybe_build_followup_override(
-                last_assistant.content if last_assistant else None,
-                request.message,
-                current_required_prompt=current_required_prompt,
-                followups_used_for_prompt=followups_used,
-                used_followups_for_prompt=used_followups_for_prompt,
-                skip_confirmation_sent=skip_confirmation_sent,
-            )
-            ran_followup_check = True
+        initial_pending_skip = pending_skip_confirmation
+        followup_override, effort_result = await prompt_builder.maybe_build_followup_override(
+            last_assistant.content if last_assistant else None,
+            request.message,
+            current_required_prompt=current_required_prompt,
+            followups_used_for_prompt=followups_used,
+            used_followups_for_prompt=used_followups_for_prompt,
+            skip_confirmation_sent=skip_confirmation_sent,
+            pending_skip_confirmation=pending_skip_confirmation,
+        )
+        ran_followup_check = True
 
         if effort_result and effort_result.get("skip_confirmation_issued"):
             pending_skip_confirmation = True
             skip_confirmation_sent = True
+        elif initial_pending_skip:
+            # Resolved skip-vs-continue dialog (stay, skip, substantive reply, or clarifying follow-up).
+            pending_skip_confirmation = False
 
         print(f"[Chat] effort_check: {time.time()-t_effort:.1f}s | override={'yes' if followup_override else 'no'}")
         if effort_result is not None:
@@ -567,7 +537,7 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
     
     # Fire-and-forget: extract memories in the background so the user
     # gets the chat response immediately without waiting for a third LLM call.
-    async def _extract_memories_bg(user_id, session_id, user_msg, cond):
+    async def _extract_memories_bg(user_id, session_id, user_msg, cond, memory_phase: int | None):
         bg_db = SessionLocal()
         try:
             existing_memories = memory_manager.get_all_existing_memories(user_id, session_id, bg_db)
@@ -579,6 +549,7 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                     auto_activate = cond in ["SESSION_AUTO", "PERSISTENT_AUTO"]
                     mem = memory_manager.create_memory_candidate(
                         user_id, session_id, candidate_text, bg_db, is_active=auto_activate,
+                        phase=memory_phase,
                     )
                     if auto_activate:
                         logging.log_memory_approved(bg_db, user_id, mem.memory_id)
@@ -589,8 +560,9 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
         finally:
             bg_db.close()
 
+    extraction_phase = current_phase if current_phase in (1, 2, 3) else None
     asyncio.create_task(_extract_memories_bg(
-        request.user_id, request.session_id, request.message, condition,
+        request.user_id, request.session_id, request.message, condition, extraction_phase,
     ))
 
     all_candidates = memory_manager.get_memory_candidates(request.user_id, request.session_id, db)
@@ -682,6 +654,14 @@ async def chat_stream(request: schemas.ChatRequest, db: DBSession = Depends(get_
             
             # Extract and create memory candidates
             try:
+                if request.phase is not None:
+                    stream_memory_phase = request.phase if request.phase in (1, 2, 3) else None
+                else:
+                    stream_memory_phase = _get_progress_state(db, request.user_id, request.session_id)[
+                        "current_phase"
+                    ]
+                    stream_memory_phase = stream_memory_phase if stream_memory_phase in (1, 2, 3) else None
+
                 # Get existing memories for deduplication
                 existing_memories = memory_manager.get_all_existing_memories(
                     request.user_id,
@@ -712,6 +692,7 @@ async def chat_stream(request: schemas.ChatRequest, db: DBSession = Depends(get_
                             candidate_text,
                             db,
                             is_active=auto_activate,
+                            phase=stream_memory_phase,
                         )
                         if auto_activate:
                             logging.log_memory_approved(db, request.user_id, memory.memory_id)

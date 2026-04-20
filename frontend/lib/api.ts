@@ -61,6 +61,7 @@ export interface Memory {
   user_id: string;
   session_id: string | null;
   text: string;
+  phase?: number | null;
   is_active: boolean;
   created_at: string;
   updated_at: string | null;
@@ -172,6 +173,13 @@ export const chatAPI = {
 
 // Memory API
 export const memoryAPI = {
+  recap: async (userId: string, sessionId: string, untilPhase: number): Promise<Memory[]> => {
+    const response = await api.get(`/memory/recap/${userId}`, {
+      params: { session_id: sessionId, until_phase: untilPhase },
+    });
+    return response.data;
+  },
+
   get: async (userId: string, sessionId?: string) => {
     const params = sessionId ? { session_id: sessionId } : {};
     const response = await api.get(`/memory/${userId}`, { params });
@@ -225,6 +233,8 @@ export interface PromptConfig {
   free_chat_prompt_extroverted: string;
   free_chat_prompt_neutral: string;
   bridge_instructions: Record<string, string>;
+  guided_turn_assessment_system?: string;
+  guided_turn_assessment_user_template?: string;
   effort_assessment_system: string;
   effort_assessment_user_template: string;
   memory_extraction_system: string;

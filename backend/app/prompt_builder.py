@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Literal
+import re
 from . import prompt_store
 
 
@@ -114,79 +114,6 @@ def build_messages(context: str, user_message: str) -> list[dict]:
     return messages
 
 
-def user_requests_skip_topic(user_message: str) -> bool:
-    """
-    True if the participant clearly wants to skip the current topic / not answer.
-    Checked before generic short-answer follow-ups so 'skip' is not treated as vague.
-    """
-    s = (user_message or "").strip().lower()
-    if not s:
-        return False
-    if s in {
-        "skip",
-        "pass",
-        "next",
-        "next question",
-        "skip this",
-        "skip this question",
-        "skip question",
-        "n/a",
-        "na",
-        "no comment",
-        "no answer",
-    }:
-        return True
-    if "next question" in s or "move on" in s or "skip this" in s:
-        return True
-    if "don't want to answer" in s or "dont want to answer" in s:
-        return True
-    if "rather not" in s and ("answer" in s or "say" in s or "share" in s):
-        return True
-    return False
-
-
-def user_message_suggests_ambiguous_skip(user_message: str) -> bool:
-    """
-    True when the participant may want to skip/move on, but did not say so clearly
-    enough for user_requests_skip_topic. Used to ask a one-time skip vs continue check.
-    Not triggered for very short generic replies (those get normal nudges instead).
-    """
-    if user_requests_skip_topic(user_message):
-        return False
-    s = (user_message or "").strip().lower()
-    if not s or len(s) < 8:
-        return False
-    hints = (
-        "rather not",
-        "prefer not to",
-        "uncomfortable",
-        "something else",
-        "different question",
-        "another question",
-        "another topic",
-        "different topic",
-        "not interested in this",
-        "not interested in that",
-        "don't want to get into",
-        "dont want to get into",
-        "don't want to talk about",
-        "dont want to talk about",
-        "can we skip",
-        "can we move",
-        "change the subject",
-        "talk about something else",
-        "don't know if i want",
-        "dont know if i want",
-        "not sure i want to answer",
-        "hard to answer this",
-        "don't feel comfortable",
-        "dont feel comfortable",
-        "pass on this",
-        "leave this one",
-    )
-    return any(h in s for h in hints)
-
-
 def get_skip_confirmation_prompt_text() -> str:
     cfg = prompt_store.get_config()
     default = (
@@ -197,130 +124,194 @@ def get_skip_confirmation_prompt_text() -> str:
     return str(cfg.get("skip_confirmation_prompt") or default).strip() or default
 
 
-def classify_skip_confirmation_reply(user_message: str) -> Literal["advance", "continue", "unclear"]:
-    """
-    After we asked skip vs continue, interpret the participant's reply.
-    """
-    if user_requests_skip_topic(user_message):
-        return "advance"
-    s = (user_message or "").strip().lower()
-    if not s:
-        return "unclear"
-    # Bare affirmatives are ambiguous (we offered both skip and stay); fall through to normal handling.
-    if s in {"no", "nah", "nope", "n"}:
-        return "continue"
-    if "go ahead" in s or "the next one" in s or "next question" in s or "skip it" in s:
-        return "advance"
-    if "don't skip" in s or "dont skip" in s or "not skip" in s:
-        return "continue"
-    if (
-        "keep going" in s
-        or "stay on" in s
-        or "stay here" in s
-        or "this question" in s
-        or "this topic" in s
-        or "same question" in s
-        or "want to continue" in s
-        or "rather stay" in s
-    ):
-        return "continue"
-    if s == "next" or s.startswith("next ") or s.endswith(" next"):
-        return "advance"
-    if s in {"keep", "stay", "continue"}:
-        return "continue"
-    return "unclear"
+def _clamp_score_int(v: object, lo: int, hi: int, default: int) -> int:
+    try:
+        iv = int(v)  # type: ignore[arg-type]
+    except Exception:
+        return default
+    return max(lo, min(hi, iv))
 
 
-def _is_generic_or_too_short(user_message: str, *, min_words: int) -> bool:
-    msg = (user_message or "").strip()
-    if not msg:
-        return True
-    words = [w for w in msg.split() if w.strip()]
-    if len(words) < min_words:
-        return True
-    generic = {
-        "idk",
-        "i dont know",
-        "i don't know",
-        "not sure",
-        "n/a",
-        "na",
-        "ok",
-        "okay",
-        "fine",
-        "good",
+def _normalize_assessment_outcome(raw: str) -> str:
+    """Normalize model output to snake_case outcome id."""
+    s = (raw or "").strip().lower().replace("-", "_")
+    s = re.sub(r"\s+", "_", s)
+    aliases = {
+        "needs_follow_up": "needs_clarifying_followup",
+        "need_clarifying_followup": "needs_clarifying_followup",
+        "clarifying_followup": "needs_clarifying_followup",
+        "skip_confirmation": "offer_skip_confirmation",
+        "ambiguous_skip": "offer_skip_confirmation",
+        "skip": "explicit_skip",
+        "advance": "pending_advance",
+        "stay": "pending_stay",
+        "continue": "pending_stay",
     }
-    normalized = " ".join(words).lower()
-    return normalized in generic
+    return aliases.get(s, s)
+
+
+def _fallback_unified_state(
+    guided_mode: bool,
+    pending_skip_confirmation: bool,
+    *,
+    reason: str,
+) -> dict:
+    o = "sufficient"
+    if pending_skip_confirmation:
+        o = "sufficient"
+    elif not guided_mode:
+        o = "sufficient"
+    return {
+        "relevance_score": 2,
+        "effort_score": 2,
+        "outcome": o,
+        "followup_question": "",
+        "assessment_fallback": True,
+        "fallback_reason": reason,
+    }
+
+
+async def assess_guided_turn(
+    last_assistant_prompt: str | None,
+    user_message: str,
+    *,
+    guided_mode: bool,
+    pending_skip_confirmation: bool,
+    skip_confirmation_sent: bool,
+    current_required_prompt: str | None,
+    followups_used_for_prompt: int,
+    max_followups: int = 3,
+) -> dict:
+    """
+    Single LLM call: skip intent, ambiguous skip offer, sufficiency, and follow-up need.
+    Used for guided Qualtrics/playground flow and (with guided_mode=False) for legacy free-chat assessments.
+    """
+    from .genai_client import call_genai
+
+    cfg = prompt_store.get_config()
+    user_template = str(cfg.get("guided_turn_assessment_user_template") or "").strip()
+    system_content = str(
+        cfg.get("guided_turn_assessment_system") or "You output strict JSON only."
+    ).strip()
+    if not user_template:
+        return _fallback_unified_state(guided_mode, pending_skip_confirmation, reason="missing_template")
+
+    at_cap = followups_used_for_prompt >= max_followups
+    current_topic = (current_required_prompt or "").strip() or "(open conversation)"
+
+    user_block = user_template.replace("{guided_interview_mode}", "yes" if guided_mode else "no")
+    user_block = user_block.replace("{pending_skip_confirmation}", "yes" if pending_skip_confirmation else "no")
+    user_block = user_block.replace(
+        "{skip_confirmation_sent}", "yes" if skip_confirmation_sent else "no"
+    )
+    user_block = user_block.replace("{followups_used}", str(followups_used_for_prompt))
+    user_block = user_block.replace("{max_followups}", str(max_followups))
+    user_block = user_block.replace("{at_followup_cap}", "yes" if at_cap else "no")
+    user_block = user_block.replace("{current_topic}", json.dumps(current_topic[:1200]))
+    user_block = user_block.replace(
+        "{last_assistant_prompt}",
+        json.dumps((last_assistant_prompt or "").strip()[:1200]),
+    )
+    user_block = user_block.replace("{user_response}", json.dumps((user_message or "").strip()[:1200]))
+
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_block},
+    ]
+
+    try:
+        raw_text = await call_genai(messages, stream=False, temperature=0.0, max_tokens=520)
+    except Exception:
+        return _fallback_unified_state(guided_mode, pending_skip_confirmation, reason="api_error")
+
+    raw_text = (raw_text or "").strip()
+    if raw_text.startswith("```"):
+        raw_text = re.sub(r"^```[a-zA-Z0-9]*\s*", "", raw_text)
+        raw_text = re.sub(r"\s*```$", "", raw_text).strip()
+
+    try:
+        data = json.loads(raw_text)
+    except Exception:
+        return _fallback_unified_state(guided_mode, pending_skip_confirmation, reason="json_parse")
+
+    outcome = _normalize_assessment_outcome(str(data.get("outcome") or ""))
+    fq = str(data.get("followup_question") or "").strip()
+    if len(fq) > 220:
+        fq = fq[:220].rstrip()
+
+    rel = _clamp_score_int(data.get("relevance_score"), 1, 3, 2)
+    effort = _clamp_score_int(data.get("effort_score"), 1, 3, 2)
+
+    if at_cap and outcome in ("needs_clarifying_followup", "offer_skip_confirmation"):
+        outcome = "sufficient"
+        fq = ""
+    if skip_confirmation_sent and outcome == "offer_skip_confirmation":
+        outcome = "sufficient"
+        fq = ""
+
+    if pending_skip_confirmation and outcome == "explicit_skip":
+        outcome = "pending_advance"
+
+    # Coerce invalid outcomes for mode
+    if not guided_mode:
+        if outcome not in ("sufficient", "needs_clarifying_followup"):
+            outcome = "sufficient"
+            fq = ""
+    elif pending_skip_confirmation:
+        if outcome not in (
+            "pending_advance",
+            "pending_stay",
+            "sufficient",
+            "needs_clarifying_followup",
+        ):
+            outcome = "sufficient"
+            fq = ""
+    else:
+        if outcome not in (
+            "explicit_skip",
+            "sufficient",
+            "needs_clarifying_followup",
+            "offer_skip_confirmation",
+        ):
+            outcome = "sufficient"
+            fq = ""
+
+    if outcome != "needs_clarifying_followup":
+        fq = ""
+    return {
+        "relevance_score": rel,
+        "effort_score": effort,
+        "outcome": outcome,
+        "followup_question": fq,
+        "unified_assessment": True,
+    }
 
 
 async def assess_effort_relevance(
     last_assistant_prompt: str | None,
     user_message: str,
 ) -> dict:
-    from .genai_client import call_genai
-
-    cfg = prompt_store.get_config()
-    user_template = cfg.get("effort_assessment_user_template", "")
-    prompt = user_template.replace(
-        "{last_assistant_prompt}", json.dumps((last_assistant_prompt or "").strip()[:800])
-    ).replace(
-        "{user_response}", json.dumps((user_message or "").strip()[:800])
+    """
+    Legacy shape for callers expecting needs_followup + followup_question.
+    Uses the same unified assessment in free-chat mode (one LLM call).
+    """
+    u = await assess_guided_turn(
+        last_assistant_prompt,
+        user_message,
+        guided_mode=False,
+        pending_skip_confirmation=False,
+        skip_confirmation_sent=False,
+        current_required_prompt=None,
+        followups_used_for_prompt=0,
+        max_followups=3,
     )
-
-    system_content = cfg.get("effort_assessment_system", "You output strict JSON only.")
-    messages = [
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": prompt},
-    ]
-
-    try:
-        raw = await call_genai(messages, stream=False, temperature=0.0, max_tokens=180)
-    except Exception:
-        return {
-            "relevance_score": 2,
-            "effort_score": 2,
-            "needs_followup": False,
-            "followup_question": "",
-            "timeout_fallback": True,
-        }
-    raw = (raw or "").strip()
-
-    try:
-        data = json.loads(raw)
-    except Exception:
-        return {
-            "relevance_score": 2,
-            "effort_score": 2,
-            "needs_followup": False,
-            "followup_question": "",
-            "parse_error": True,
-            "raw_preview": raw[:200],
-        }
-
-    def _clamp_int(v: object, lo: int, hi: int, default: int) -> int:
-        try:
-            iv = int(v)  # type: ignore[arg-type]
-        except Exception:
-            return default
-        return max(lo, min(hi, iv))
-
-    relevance = _clamp_int(data.get("relevance_score"), 1, 3, 2)
-    effort = _clamp_int(data.get("effort_score"), 1, 3, 2)
-    needs_followup = bool(data.get("needs_followup"))
-    followup = str(data.get("followup_question") or "")
-    followup = followup.strip()
-    if not needs_followup:
-        followup = ""
-    else:
-        if len(followup) > 220:
-            followup = followup[:220].rstrip()
-
+    need = u.get("outcome") == "needs_clarifying_followup"
     return {
-        "relevance_score": relevance,
-        "effort_score": effort,
-        "needs_followup": needs_followup,
-        "followup_question": followup,
+        "relevance_score": u["relevance_score"],
+        "effort_score": u["effort_score"],
+        "needs_followup": need,
+        "followup_question": u.get("followup_question") or "",
+        "unified_assessment": True,
     }
 
 
@@ -332,120 +323,96 @@ async def maybe_build_followup_override(
     followups_used_for_prompt: int = 0,
     used_followups_for_prompt: list[str] | None = None,
     skip_confirmation_sent: bool = False,
+    pending_skip_confirmation: bool = False,
 ) -> tuple[str | None, dict | None]:
     """
-    Evaluate sufficiency of user response and optionally return a follow-up question.
-
-    Decision policy:
-    - Very short/generic response + under cap: return a conversational follow-up
-    - Very short/generic + at cap: return None (advance to next topic)
-    - Substantive response: use LLM to assess; only follow up if truly evasive
-    - Sufficient: return None (advance immediately)
+    Single LLM assessment (assess_guided_turn) decides skip vs sufficient vs follow-up vs skip-confirm offer.
     """
     cfg = prompt_store.get_config()
     max_followups = 3
     used_followups = [s.strip().lower() for s in (used_followups_for_prompt or []) if str(s).strip()]
-    min_words = 5
+    guided_mode = current_required_prompt is not None
+    if not guided_mode:
+        pending_skip_confirmation = False
 
-    if user_requests_skip_topic(user_message):
-        return None, {
-            "relevance_score": 2,
-            "effort_score": 2,
-            "needs_followup": False,
-            "followup_question": "",
-            "user_skip": True,
-        }
+    state = await assess_guided_turn(
+        last_assistant_prompt,
+        user_message,
+        guided_mode=guided_mode,
+        pending_skip_confirmation=pending_skip_confirmation,
+        skip_confirmation_sent=skip_confirmation_sent,
+        current_required_prompt=current_required_prompt,
+        followups_used_for_prompt=followups_used_for_prompt,
+        max_followups=max_followups,
+    )
 
-    if not skip_confirmation_sent and user_message_suggests_ambiguous_skip(user_message):
+    outcome = str(state.get("outcome") or "sufficient")
+    effort_result: dict = {
+        "relevance_score": state["relevance_score"],
+        "effort_score": state["effort_score"],
+        "needs_followup": False,
+        "followup_question": "",
+        "unified_assessment": True,
+        "assessment_outcome": outcome,
+    }
+    if state.get("assessment_fallback"):
+        effort_result["assessment_fallback"] = True
+        effort_result["fallback_reason"] = state.get("fallback_reason")
+
+    # Pending skip-dialogue resolutions (same model call)
+    if pending_skip_confirmation:
+        if outcome == "pending_advance" or outcome == "explicit_skip":
+            effort_result["user_skip"] = True
+            return None, effort_result
+        if outcome == "pending_stay":
+            effort_result["resume_after_skip_prompt"] = True
+            return None, effort_result
+        # sufficient or needs_clarifying_followup: fall through to mapping below
+
+    if guided_mode and outcome == "explicit_skip":
+        effort_result["user_skip"] = True
+        return None, effort_result
+
+    if guided_mode and outcome == "offer_skip_confirmation":
         followup_text = get_skip_confirmation_prompt_text()
-        return followup_text, {
-            "relevance_score": 2,
-            "effort_score": 2,
-            "needs_followup": True,
-            "followup_question": followup_text,
-            "rule_based": True,
-            "skip_confirmation_issued": True,
-        }
+        effort_result["needs_followup"] = True
+        effort_result["followup_question"] = followup_text
+        effort_result["skip_confirmation_issued"] = True
+        return followup_text, effort_result
 
-    if _is_generic_or_too_short(user_message, min_words=min_words):
-        if followups_used_for_prompt < max_followups:
+    if outcome == "needs_clarifying_followup":
+        followup_question = (state.get("followup_question") or "").strip()
+        if guided_mode and current_required_prompt:
+            if followup_question and current_required_prompt.lower() not in followup_question.lower():
+                followup_question = f"Regarding {current_required_prompt.lower()}, {followup_question}"
+        normalized = followup_question.strip().lower()
+        if normalized in used_followups:
             if current_required_prompt:
-                followup_variants = list(cfg.get("followup_variants_with_prompt", [
-                    "No worries! Take your time with this one. What first comes to mind when you think about it?",
-                    "I'm curious to hear your take -- even a quick thought would be great!",
-                    "That's okay! Is there anything at all that stands out to you about this?",
-                ]))
+                fallbacks = [
+                    f"I'm curious -- what's one specific thing that stands out to you about {current_required_prompt.lower()}?",
+                    "What's a concrete example that comes to mind?",
+                    "If you picture it vividly, what detail jumps out first?",
+                ]
             else:
-                followup_variants = list(cfg.get("followup_variants_without_prompt", [
-                    "No rush! What's the first thing that comes to mind?",
-                    "I'm curious to hear more -- even a quick thought!",
-                    "That's okay! Anything at all stand out to you?",
-                ]))
-            ordered = [
-                followup_variants[(followups_used_for_prompt + i) % len(followup_variants)]
-                for i in range(len(followup_variants))
-            ]
-            followup_text = ""
-            for cand in ordered:
-                if cand.strip().lower() not in used_followups:
-                    followup_text = cand
+                fallbacks = [
+                    "What's one specific thing that stands out?",
+                    "What's a concrete example that comes to mind?",
+                    "If you picture it vividly, what jumps out first?",
+                ]
+            for fb in fallbacks:
+                if fb.strip().lower() not in used_followups:
+                    followup_question = fb
                     break
-            if not followup_text:
-                followup_text = ordered[0]
-            return followup_text, {
-                "relevance_score": 2,
-                "effort_score": 1,
-                "needs_followup": True,
-                "followup_question": followup_text,
-                "rule_based": True,
-            }
-        else:
-            return None, {
-                "relevance_score": 2,
-                "effort_score": 1,
-                "needs_followup": False,
-                "followup_question": "",
-                "rule_based": True,
-                "followup_cap_reached": True,
-            }
+        if not followup_question.strip():
+            followup_question = "What's one thing that first comes to mind for you?"
+        effort_result["needs_followup"] = True
+        effort_result["followup_question"] = followup_question
+        return followup_question, effort_result
 
-    if followups_used_for_prompt < max_followups:
-        effort_result = await assess_effort_relevance(last_assistant_prompt, user_message)
-
-        if effort_result.get("needs_followup", False):
-            followup_question = effort_result.get("followup_question", "").strip()
-            if followup_question:
-                if current_required_prompt and current_required_prompt.lower() not in followup_question.lower():
-                    followup_question = f"Regarding {current_required_prompt.lower()}, {followup_question}"
-
-                normalized = followup_question.strip().lower()
-                if normalized in used_followups:
-                    if current_required_prompt:
-                        fallbacks = [
-                            f"I'm curious -- what's one specific thing that stands out to you about {current_required_prompt.lower()}?",
-                            f"What's a concrete example that comes to mind?",
-                            f"If you picture it vividly, what detail jumps out first?",
-                        ]
-                    else:
-                        fallbacks = [
-                            "What's one specific thing that stands out?",
-                            "What's a concrete example that comes to mind?",
-                            "If you picture it vividly, what jumps out first?",
-                        ]
-                    for fb in fallbacks:
-                        if fb.strip().lower() not in used_followups:
-                            followup_question = fb
-                            effort_result["followup_question"] = followup_question
-                            break
-                return followup_question, effort_result
-
-        return None, effort_result
-    else:
-        effort_result = await assess_effort_relevance(last_assistant_prompt, user_message)
-        effort_result["needs_followup"] = False
-        effort_result["followup_question"] = ""
+    # sufficient (and free-chat sufficient path)
+    if followups_used_for_prompt >= max_followups and guided_mode:
         effort_result["followup_cap_reached"] = True
-        return None, effort_result
+    return None, effort_result
 
 
 async def extract_memories_from_conversation(

@@ -5,7 +5,7 @@ Uses sync httpx in a thread pool because httpx.AsyncClient has a known
 DNS/SSL incompatibility with the anyio backend on this server (async
 times out while sync completes in ~2 s).
 
-Model: set GENAI_MODEL (default gpt-oss:latest — RCAC keeps this hot in GPU memory).
+Model: fixed to llama4:latest for this study (see get_genai_model). Not configurable via env.
 
 Keys: set GENAI_API_KEYS=key1,key2,... or comma-separated GENAI_API_KEY.
       Keys are chosen round-robin per API call to spread rate limits.
@@ -26,7 +26,7 @@ GENAI_API_URL = "https://genai.rcac.purdue.edu/api/chat/completions"
 def _extract_assistant_content(message: Any) -> str:
     """
     Normalize assistant text from chat completion message.
-    Some models (e.g. gpt-oss) return content as a list of parts or use alternate fields.
+    Some API responses return content as a list of parts or use alternate fields.
     """
     if not isinstance(message, dict):
         return ""
@@ -80,9 +80,8 @@ def _extract_delta_text(delta: Any) -> str:
 
 def sanitize_companion_public_output(text: str) -> str:
     """
-    gpt-oss and similar reasoning models sometimes emit planning + a final 'Let's produce:'
-    block in the same user-visible string. Keep only the final conversational part when
-    those markers are present.
+    Some models emit planning plus a final 'Let's produce:' block in the same user-visible
+    string. Keep only the final conversational part when those markers are present.
     """
     if not text or not text.strip():
         return text
@@ -104,8 +103,8 @@ def sanitize_companion_public_output(text: str) -> str:
     return t
 
 
-# Default: RCAC indicated gpt-oss:latest / llama4 stay resident; older models may cold-load.
-_DEFAULT_MODEL = "gpt-oss:latest"
+# Single study model — all chat completions use this id with Purdue GenAI.
+STUDY_GENAI_MODEL = "llama4:latest"
 
 _keys_cache: list[str] | None = None
 _key_lock = threading.Lock()
@@ -113,8 +112,8 @@ _key_rr = 0
 
 
 def get_genai_model() -> str:
-    """Model id for chat completions (OpenAI-compatible body)."""
-    return (os.getenv("GENAI_MODEL") or _DEFAULT_MODEL).strip()
+    """Model id for chat completions (OpenAI-compatible body). Fixed for this study."""
+    return STUDY_GENAI_MODEL
 
 
 def _load_api_keys() -> list[str]:
@@ -218,12 +217,12 @@ async def call_genai(
     if not text.strip() and isinstance(msg, dict):
         print(f"[GenAI] warn: empty assistant text; message keys={list(msg.keys())}")
 
-    # RCAC gpt-oss sometimes returns message.content="" on non-stream while usage still
-    # reports completion_tokens > 0; the browser UI uses /chat/stream which works. Retry
-    # as SSE aggregation when we know tokens were billed but body has no text.
+    # The API sometimes returns message.content="" on non-stream while usage still
+    # reports completion_tokens > 0. Retry as SSE aggregation when tokens were billed
+    # but the JSON body has no visible text.
     if not text.strip() and comp_toks > 0:
-        # Tiny max_tokens (e.g. 32) can be exhausted by reasoning before visible text; retry
-        # stream with a floor so gpt-oss-style models can emit assistant content.
+        # Tiny max_tokens (e.g. 32) can be exhausted by internal reasoning before visible text; retry
+        # stream with a floor so the model can emit assistant content.
         retry_max = max_tokens
         if retry_max is not None:
             retry_max = max(retry_max, 256)
@@ -318,7 +317,7 @@ async def stream_genai(
 
 
 def __getattr__(name: str):
-    """Backward compatibility: GENAI_MODEL -> get_genai_model()."""
+    """Backward compatibility: legacy GENAI_MODEL import."""
     if name == "GENAI_MODEL":
         return get_genai_model()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

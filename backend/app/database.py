@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
@@ -40,4 +40,11 @@ def get_db():
 def init_db():
     """Initialize database tables"""
     Base.metadata.create_all(bind=engine)
+    # SQLite: existing deployments may predate the `phase` column; add it if missing.
+    if DATABASE_URL.startswith("sqlite"):
+        with engine.begin() as conn:
+            rows = conn.execute(text("PRAGMA table_info(memories)")).fetchall()
+            col_names = [r[1] for r in rows]
+            if "phase" not in col_names:
+                conn.execute(text("ALTER TABLE memories ADD COLUMN phase INTEGER"))
 

@@ -7,7 +7,7 @@ A web-based chatbot designed to study how AI memory persistence and user control
 - **Frontend**: Next.js + React + TypeScript + TailwindCSS
 - **Backend**: FastAPI (Python 3.9+)
 - **Database**: PostgreSQL (production) or SQLite (local development)
-- **LLM**: Purdue GenAI API (Llama 3.1 model)
+- **LLM**: Purdue GenAI API (`llama4:latest`, configured in `backend/app/genai_client.py`)
 
 ## Experimental Conditions
 

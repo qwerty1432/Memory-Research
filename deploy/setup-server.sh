@@ -87,7 +87,7 @@ if [ ! -f "${APP_DIR}/backend/.env" ]; then
     SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
     cat > "${APP_DIR}/backend/.env" << ENVEOF
 DATABASE_URL=sqlite:////${DATA_DIR}/memory_research.db
-GENAI_MODEL=gpt-oss:latest
+# Chat model is llama4:latest (fixed in backend/app/genai_client.py)
 # One key: GENAI_API_KEY=PASTE_YOUR_KEY_HERE
 # Or multiple (comma-separated, round-robin): GENAI_API_KEYS=key1,key2
 GENAI_API_KEY=PASTE_YOUR_KEY_HERE
@@ -95,7 +95,7 @@ SECRET_KEY=${SECRET}
 ENVIRONMENT=production
 ALLOWED_ORIGINS=https://hai.cs.purdue.edu,https://purdue.yul1.qualtrics.com
 ENVEOF
-    echo "  Created backend/.env — EDIT it: GENAI_API_KEY or GENAI_API_KEYS, optional GENAI_MODEL"
+    echo "  Created backend/.env — EDIT it: GENAI_API_KEY or GENAI_API_KEYS"
 else
     echo "  backend/.env already exists (keeping current)"
 fi
@@ -134,7 +134,7 @@ echo "  Setup complete!"
 echo ""
 echo "  BEFORE starting services:"
 echo "    1. Edit ${APP_DIR}/backend/.env"
-echo "       → Set GENAI_API_KEY or GENAI_API_KEYS (comma-separated); optional GENAI_MODEL"
+echo "       → Set GENAI_API_KEY or GENAI_API_KEYS (comma-separated)"
 echo "    2. Rebuild frontend (picks up .env.local):"
 echo "       cd ${APP_DIR}/frontend && npm run build"
 echo ""

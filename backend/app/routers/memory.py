@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import schemas, models, memory_manager, logging
@@ -7,6 +7,34 @@ from uuid import UUID
 from typing import List
 
 router = APIRouter(prefix="/memory", tags=["memory"])
+
+
+@router.get("/recap/{user_id}", response_model=List[schemas.MemoryResponse])
+def get_memory_recap(
+    user_id: UUID,
+    session_id: UUID = Query(..., description="Study session; must belong to the user"),
+    until_phase: int = Query(..., ge=1, le=3, description="Phase just completed (recap boundary)"),
+    db: Session = Depends(get_db),
+):
+    """
+    Phase-end recap: active memories only.
+
+    SESSION_AUTO / SESSION_USER: current session, ``phase == until_phase`` (NULL phase excluded).
+
+    PERSISTENT_AUTO / PERSISTENT_USER: user-wide, ``phase <= until_phase`` or ``phase`` NULL (legacy).
+    """
+    user = db.query(models.User).filter(models.User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    study_session = db.query(models.Session).filter(models.Session.session_id == session_id).first()
+    if not study_session or study_session.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    rows = memory_manager.get_memory_recap(
+        user_id, session_id, until_phase, user.condition_id, db
+    )
+    return rows
 
 
 @router.get("/{user_id}", response_model=List[schemas.MemoryResponse])

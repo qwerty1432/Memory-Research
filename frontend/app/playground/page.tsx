@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { promptsAPI, PromptConfig, chatAPI, authAPI, sessionAPI, Message, PhaseStatus } from '@/lib/api';
+import { promptsAPI, PromptConfig, chatAPI, authAPI, sessionAPI, memoryAPI, conditionAPI, Message, PhaseStatus, Memory } from '@/lib/api';
+import MemoryReviewPanel from '@/components/MemoryReviewPanel';
+import PhaseMemoryRecap from '@/components/PhaseMemoryRecap';
 
 // ---------------------------------------------------------------------------
 // Section config — only prompts used in the guided study flow
@@ -24,8 +26,10 @@ const CONVERSATION_SECTIONS: SectionDef[] = [
 ];
 
 const INTERNAL_SECTIONS: SectionDef[] = [
-  { key: 'effort_assessment_system', label: 'Effort Assessment — System', description: 'System message for the LLM call that judges whether a participant\'s answer is sufficient or needs a follow-up question. Only fires after the canned follow-ups are exhausted.', type: 'textarea' },
-  { key: 'effort_assessment_user_template', label: 'Effort Assessment — User Template', description: 'The evaluation prompt sent to the LLM to assess effort and relevance. Use {last_assistant_prompt} and {user_response} as placeholders. Must return strict JSON.', type: 'textarea' },
+  { key: 'guided_turn_assessment_system', label: 'Guided Turn Assessment — System', description: 'System message for the unified LLM call that decides skip vs sufficient vs follow-up vs skip-confirmation (JSON).', type: 'textarea' },
+  { key: 'guided_turn_assessment_user_template', label: 'Guided Turn Assessment — User Template', description: 'Template with placeholders: guided_interview_mode, pending_skip_confirmation, skip_confirmation_sent, followups_used, max_followups, at_followup_cap, current_topic, last_assistant_prompt, user_response.', type: 'textarea' },
+  { key: 'effort_assessment_system', label: 'Effort Assessment — System (legacy)', description: 'Legacy; guided flow uses guided_turn_assessment_* instead.', type: 'textarea' },
+  { key: 'effort_assessment_user_template', label: 'Effort Assessment — User Template (legacy)', description: 'Legacy free-chat wrapper; guided flow uses guided_turn_assessment_*.', type: 'textarea' },
   { key: 'memory_extraction_system', label: 'Memory Extraction — System', description: 'System message for the LLM call that extracts factual memories from participant messages after each turn.', type: 'textarea' },
   { key: 'memory_extraction_user_template', label: 'Memory Extraction — User Template', description: 'The extraction prompt that tells the LLM what to pull from the user\'s message. Use {user_message} and {existing_context} as placeholders.', type: 'textarea' },
 ];
@@ -33,6 +37,8 @@ const INTERNAL_SECTIONS: SectionDef[] = [
 // ---------------------------------------------------------------------------
 // Study-simulation test chat
 // ---------------------------------------------------------------------------
+const CONDITION_OPTIONS = ['SESSION_AUTO', 'SESSION_USER', 'PERSISTENT_AUTO', 'PERSISTENT_USER'] as const;
+
 function StudyChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -42,7 +48,19 @@ function StudyChat() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [phaseStatus, setPhaseStatus] = useState<PhaseStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [conditionId, setConditionId] = useState<string>('SESSION_AUTO');
+  const [memoryCandidates, setMemoryCandidates] = useState<Memory[]>([]);
+  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const refreshMemoriesFromServer = useCallback(async (uid: string, sid: string) => {
+    try {
+      const list = await memoryAPI.getCandidates(uid, sid);
+      setMemoryCandidates(list);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const bootstrap = useCallback(async () => {
     setError(null);
@@ -51,6 +69,8 @@ function StudyChat() {
     setPhaseStatus(null);
     setUserId(null);
     setSessionId(null);
+    setMemoryCandidates([]);
+    setMemoryPanelOpen(false);
     try {
       const qualtricsId = `playground_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const auth = await authAPI.qualtricsAuthenticate(qualtricsId, qualtricsId, null);
@@ -58,17 +78,22 @@ function StudyChat() {
       const sid = auth.session_id;
       setUserId(uid);
       setSessionId(sid);
+      setConditionId(auth.condition_id || 'SESSION_AUTO');
 
       const msgs: Message[] = await sessionAPI.getMessages(sid);
       setMessages(msgs);
 
       const progress = await chatAPI.getProgress(uid, sid);
       setPhaseStatus(progress);
+
+      const cond = await conditionAPI.get(uid);
+      setConditionId(cond.condition_id);
+      await refreshMemoriesFromServer(uid, sid);
     } catch (e: any) {
       setError(`Failed to create test session: ${e.message}`);
     }
     setBootstrapping(false);
-  }, []);
+  }, [refreshMemoriesFromServer]);
 
   useEffect(() => { bootstrap(); }, [bootstrap]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -88,6 +113,7 @@ function StudyChat() {
       if (resp.phase_status) {
         setPhaseStatus(resp.phase_status);
       }
+      await refreshMemoriesFromServer(userId, sessionId);
     } catch (e: any) {
       setMessages(prev => [...prev, { msg_id: '', session_id: sessionId, role: 'assistant', content: `Error: ${e.message}`, created_at: new Date().toISOString() }]);
     }
@@ -123,11 +149,44 @@ function StudyChat() {
     return `Phase ${phaseStatus.phase} — Topic ${qIdx}/${phaseStatus.total_prompts}${clarifying}`;
   })();
 
+  const handleConditionChange = async (next: string) => {
+    if (!userId) return;
+    setConditionId(next);
+    try {
+      await conditionAPI.update(userId, next);
+    } catch (e: any) {
+      setError(`Could not update condition: ${e.message}`);
+    }
+  };
+
   return (
+    <>
     <div className="flex flex-col h-full">
       {/* toolbar */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 bg-white/90 shrink-0">
+      <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-gray-200 bg-white/90 shrink-0">
         <span className="text-xs font-semibold text-gray-700">Study Simulation</span>
+        <label className="flex items-center gap-1.5 text-xs text-gray-600">
+          <span className="hidden sm:inline">Condition</span>
+          <select
+            value={conditionId}
+            onChange={(e) => handleConditionChange(e.target.value)}
+            disabled={!userId || bootstrapping}
+            className="text-xs border border-gray-300 rounded-lg px-2 py-1 bg-white max-w-[10rem]"
+            title="Memory behavior: use SESSION_USER or PERSISTENT_USER to approve/edit memories"
+          >
+            {CONDITION_OPTIONS.map((c) => (
+              <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          onClick={() => setMemoryPanelOpen(true)}
+          disabled={!userId || bootstrapping}
+          className="text-xs px-3 py-1 rounded-full bg-[#ede7f6] text-[#4a3a6e] hover:bg-[#e0d4f7] transition disabled:opacity-50 border border-[#d4c5e8]"
+        >
+          Memories
+        </button>
         <button type="button" onClick={bootstrap} disabled={bootstrapping} className="ml-auto text-xs px-3 py-1 rounded-full bg-gray-100 hover:bg-gray-200 transition disabled:opacity-50">
           New Session
         </button>
@@ -173,6 +232,19 @@ function StudyChat() {
         <div ref={bottomRef} />
       </div>
 
+      {userId && sessionId && phaseStatus && (showContinue || studyComplete) && (
+        <PhaseMemoryRecap
+          userId={userId}
+          sessionId={sessionId}
+          conditionId={conditionId}
+          untilPhase={studyComplete ? 3 : phaseStatus.phase}
+          visible
+          onMemoriesChanged={() => {
+            if (userId && sessionId) refreshMemoriesFromServer(userId, sessionId);
+          }}
+        />
+      )}
+
       {/* continue / finish banner */}
       {showContinue && (
         <div className="px-4 py-3 border-t border-amber-200 bg-amber-50 shrink-0">
@@ -205,6 +277,21 @@ function StudyChat() {
         <button type="submit" disabled={chatDisabled || !input.trim()} className="lavender-btn text-sm disabled:opacity-50">Send</button>
       </form>
     </div>
+
+    {userId && sessionId && (
+      <MemoryReviewPanel
+        userId={userId}
+        sessionId={sessionId}
+        conditionId={conditionId}
+        isOpen={memoryPanelOpen}
+        onClose={() => setMemoryPanelOpen(false)}
+        candidates={memoryCandidates}
+        onCandidatesUpdate={() => {
+          if (userId && sessionId) refreshMemoriesFromServer(userId, sessionId);
+        }}
+      />
+    )}
+    </>
   );
 }
 

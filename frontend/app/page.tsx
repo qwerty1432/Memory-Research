@@ -13,6 +13,7 @@ import CollapsibleButtonMenu from '@/components/CollapsibleButtonMenu';
 import MenuTutorial from '@/components/MenuTutorial';
 import ChatTutorial from '@/components/ChatTutorial';
 import FinishConversationButton from '@/components/FinishConversationButton';
+import PhaseMemoryRecap from '@/components/PhaseMemoryRecap';
 import AvatarSettingsModal from '@/components/AvatarSettingsModal';
 import AvatarOnboarding from '@/components/AvatarOnboarding';
 import { AssistantAvatarSettings } from '@/components/AiAvatar';
@@ -53,6 +54,7 @@ export default function Home() {
     // Marked optional because earlier phases may not include it.
     study_complete?: boolean;
     current_prompt_index?: number;
+    followups_used_for_prompt?: number;
   } | null>(null);
 
   useEffect(() => {
@@ -318,6 +320,15 @@ export default function Home() {
   const conditionDisclaimer = getConditionDisclaimer(conditionId);
   const mustAcknowledgeDisclaimer = messages.length === 0 && !hasAcknowledgedDisclaimer;
 
+  const showPhaseRecap =
+    isQualtrics &&
+    !!phaseProgress &&
+    ((phaseProgress.phase_complete && !phaseProgress.study_complete) ||
+      !!phaseProgress.study_complete);
+  const recapUntilPhase = phaseProgress?.study_complete
+    ? 3
+    : (phaseProgress?.phase ?? 1);
+
   return (
     <div className="flex flex-col min-h-[100dvh] h-[100dvh] bg-gray-50">
       {/* Header at the top */}
@@ -459,6 +470,19 @@ export default function Home() {
               }}
               chatInputRef={chatInputRef}
               assistantAvatar={assistantAvatar}
+            />
+          )}
+
+          {isQualtrics && showPhaseRecap && userId && sessionId && (
+            <PhaseMemoryRecap
+              userId={userId}
+              sessionId={sessionId}
+              conditionId={conditionId}
+              untilPhase={recapUntilPhase}
+              visible={showPhaseRecap}
+              onMemoriesChanged={() => {
+                memoryAPI.getCandidates(userId, sessionId).then(setMemoryCandidates);
+              }}
             />
           )}
           

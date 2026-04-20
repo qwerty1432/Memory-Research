@@ -11,7 +11,7 @@ try:
             "Content-Type": "application/json",
         },
         json={
-            "model": "llama3.1:latest",
+            "model": "llama4:latest",
             "messages": [{"role": "user", "content": "Hi"}],
             "max_tokens": 10,
         },

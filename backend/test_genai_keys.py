@@ -28,7 +28,7 @@ async def main():
         print(f"  call {i + 1} -> key_slot={slot}")
     # Tiny live call to RCAC (uses next key in sequence)
     print("Live ping (1 GenAI call)...")
-    # Reasoning models (e.g. gpt-oss) may use the whole small budget before visible text;
+    # Some models may use the whole small budget before visible assistant text;
     # use enough headroom for a one-word reply after internal reasoning.
     out = await call_genai(
         [{"role": "user", "content": "Reply with exactly one word: ok"}],
