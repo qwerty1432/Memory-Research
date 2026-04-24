@@ -31,7 +31,7 @@ def create_session(session_data: schemas.SessionCreate, db: Session = Depends(ge
         logging.log_session_ended(db, user_id, active_session.session_id)
         
         # Cleanup session memories if in ephemeral mode
-        if user.condition_id in ["SESSION_AUTO", "SESSION_USER"]:
+        if user.condition_id in ["SESSION_AUTO"]:
             memory_manager.cleanup_session_memories(active_session.session_id, db)
     
     # Create new session
@@ -92,7 +92,7 @@ def end_session(session_id: UUID, db: Session = Depends(get_db)):
     
     # Cleanup session memories if in ephemeral mode
     user = db.query(models.User).filter(models.User.user_id == session.user_id).first()
-    if user and user.condition_id in ["SESSION_AUTO", "SESSION_USER"]:
+    if user and user.condition_id in ["SESSION_AUTO"]:
         memory_manager.cleanup_session_memories(session_id, db)
     
     return session

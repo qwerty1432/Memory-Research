@@ -10,10 +10,12 @@ import asyncio
 import os
 import json
 import time
+import random
 from sse_starlette.sse import EventSourceResponse
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 QUALTRICS_PHASE_EVENT = "qualtrics_phase_session"
+MIN_FOLLOWUPS_BEFORE_ADVANCE = 2
 
 
 @router.get("/progress", response_model=schemas.PhaseStatus)
@@ -48,6 +50,34 @@ def get_progress(
     )
 
 
+def _ensure_phase_prompt_order(
+    phase_prompts: list[str],
+    phase: int,
+    phase_prompt_orders: dict[str, list[int]] | None,
+) -> tuple[list[int], dict[str, list[int]]]:
+    orders = dict(phase_prompt_orders or {})
+    phase_key = str(phase)
+    total = len(phase_prompts)
+    existing = orders.get(phase_key) or []
+    valid = (
+        len(existing) == total
+        and set(existing) == set(range(total))
+    )
+    if not valid:
+        order = list(range(total))
+        random.shuffle(order)
+        orders[phase_key] = order
+    return orders[phase_key], orders
+
+
+def _prompts_for_order(phase_prompts: list[str], order: list[int]) -> list[str]:
+    if not phase_prompts:
+        return []
+    if len(order) != len(phase_prompts):
+        return phase_prompts
+    return [phase_prompts[i] for i in order if 0 <= i < len(phase_prompts)]
+
+
 @router.post("/advance", response_model=schemas.AdvancePhaseResponse)
 def advance_phase(
     request: schemas.AdvancePhaseRequest,
@@ -64,6 +94,7 @@ def advance_phase(
     used_followups_for_prompt = progress["used_followups_for_prompt"]
     phase_complete = progress["phase_complete"]
     study_complete = progress["study_complete"]
+    phase_prompt_orders = progress["phase_prompt_orders"]
 
     if study_complete:
         raise HTTPException(status_code=400, detail="Study already complete")
@@ -83,6 +114,13 @@ def advance_phase(
     phase_complete = False
     study_complete = False
 
+    phase_prompts = prompt_builder.get_phase_prompts(current_phase)
+    total_prompts = len(phase_prompts)
+
+    phase_order, phase_prompt_orders = _ensure_phase_prompt_order(
+        phase_prompts, current_phase, phase_prompt_orders
+    )
+    ordered_prompts = _prompts_for_order(phase_prompts, phase_order)
     _update_progress_state(
         db,
         request.user_id,
@@ -95,12 +133,12 @@ def advance_phase(
         study_complete=study_complete,
         pending_skip_confirmation=False,
         skip_confirmation_sent=False,
+        phase_prompt_orders=phase_prompt_orders,
     )
-
-    phase_prompts = prompt_builder.get_phase_prompts(current_phase)
-    total_prompts = len(phase_prompts)
-
-    opening_message = prompt_builder.get_phase_opening_message(current_phase)
+    first_prompt = ordered_prompts[0] if ordered_prompts else None
+    opening_message = prompt_builder.get_phase_opening_message_for_question(
+        current_phase, first_prompt
+    )
     assistant_opening = Message(
         session_id=request.session_id,
         role="assistant",
@@ -169,6 +207,7 @@ def _get_progress_state(db: DBSession, user_id: UUID, session_id: UUID) -> dict:
             "study_complete": progress.get("study_complete", False),
             "pending_skip_confirmation": progress.get("pending_skip_confirmation", False),
             "skip_confirmation_sent": progress.get("skip_confirmation_sent", False),
+            "phase_prompt_orders": progress.get("phase_prompt_orders", {}) or {},
         }
     # Default: start at phase 1, prompt 0
     return {
@@ -180,6 +219,7 @@ def _get_progress_state(db: DBSession, user_id: UUID, session_id: UUID) -> dict:
         "study_complete": False,
         "pending_skip_confirmation": False,
         "skip_confirmation_sent": False,
+        "phase_prompt_orders": {},
     }
 
 
@@ -196,6 +236,7 @@ def _update_progress_state(
     study_complete: bool,
     pending_skip_confirmation: bool = False,
     skip_confirmation_sent: bool = False,
+    phase_prompt_orders: dict[str, list[int]] | None = None,
 ):
     """Update progress state and log it."""
     logging.log_progress_update(
@@ -210,6 +251,7 @@ def _update_progress_state(
         study_complete=study_complete,
         pending_skip_confirmation=pending_skip_confirmation,
         skip_confirmation_sent=skip_confirmation_sent,
+        phase_prompt_orders=phase_prompt_orders,
     )
 
 
@@ -246,6 +288,7 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
         study_complete = progress["study_complete"]
         pending_skip_confirmation = progress["pending_skip_confirmation"]
         skip_confirmation_sent = progress["skip_confirmation_sent"]
+        phase_prompt_orders = progress["phase_prompt_orders"]
     else:
         # Legacy mode: use explicit phase
         current_phase = request.phase
@@ -260,6 +303,7 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
         used_followups_for_prompt: list[str] = []
         phase_complete = False
         study_complete = False
+        phase_prompt_orders = {}
     
     phase_status = None
     
@@ -276,10 +320,15 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
     
     # Determine current required prompt (if in guided mode)
     current_required_prompt = None
+    ordered_phase_prompts: list[str] = []
     if is_single_block_mode and not study_complete:
         phase_prompts = prompt_builder.get_phase_prompts(current_phase)
-        if current_prompt_index < len(phase_prompts):
-            current_required_prompt = phase_prompts[current_prompt_index]
+        order, phase_prompt_orders = _ensure_phase_prompt_order(
+            phase_prompts, current_phase, phase_prompt_orders
+        )
+        ordered_phase_prompts = _prompts_for_order(phase_prompts, order)
+        if current_prompt_index < len(ordered_phase_prompts):
+            current_required_prompt = ordered_phase_prompts[current_prompt_index]
     
     # Evaluate sufficiency and get follow-up override (if needed)
     t_start = time.time()
@@ -321,7 +370,11 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
     if is_single_block_mode and not study_complete:
         # Single-block guided mode
         phase_prompts = prompt_builder.get_phase_prompts(current_phase)
-        total_prompts = len(phase_prompts)
+        order, phase_prompt_orders = _ensure_phase_prompt_order(
+            phase_prompts, current_phase, phase_prompt_orders
+        )
+        ordered_phase_prompts = _prompts_for_order(phase_prompts, order)
+        total_prompts = len(ordered_phase_prompts)
 
         # If the phase is already complete, we should not advance counters further.
         # We keep progress frozen until the UI calls /chat/advance.
@@ -347,24 +400,41 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                     # only when they are not explicitly staying on the same prompt.
                     if effort_result.get("resume_after_skip_prompt"):
                         should_advance_prompt = False
-                    else:
+                    elif effort_result.get("user_skip"):
                         should_advance_prompt = True
+                    elif followups_used >= MIN_FOLLOWUPS_BEFORE_ADVANCE:
+                        should_advance_prompt = True
+                    else:
+                        followup_override = prompt_builder.build_forced_followup_question(
+                            current_required_prompt,
+                            used_followups_for_prompt,
+                        )
+                        effort_result["needs_followup"] = True
+                        effort_result["followup_question"] = followup_override
+                        should_advance_prompt = False
                 elif effort_result.get("followup_cap_reached", False):
                     # Hit follow-up cap - force advance even if insufficient
                     should_advance_prompt = True
             # If followup_override is not None, we're asking a follow-up - don't advance
             
             if should_advance_prompt:
+                skip_transition = bool(effort_result and effort_result.get("user_skip"))
                 # Advance to next prompt
                 current_prompt_index += 1
                 followups_used = 0  # Reset follow-up counter for new prompt
                 used_followups_for_prompt = []
                 pending_skip_confirmation = False
                 skip_confirmation_sent = False
+                if skip_transition and current_prompt_index < total_prompts:
+                    followup_override = prompt_builder.build_skip_transition_message(
+                        ordered_phase_prompts[current_prompt_index]
+                    )
                 
                 # Check if phase is complete
                 if current_prompt_index >= total_prompts:
                     phase_complete = True
+                    if skip_transition:
+                        followup_override = prompt_builder.build_skip_transition_message(None)
                     # IMPORTANT (single-block Qualtrics flow):
                     # Do NOT auto-advance to the next phase here. We wait for the UI "Continue"
                     # action to call /chat/advance, which will move Phase 1->2 or 2->3 and
@@ -390,6 +460,7 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
             study_complete=study_complete,
             pending_skip_confirmation=pending_skip_confirmation,
             skip_confirmation_sent=skip_confirmation_sent,
+            phase_prompt_orders=phase_prompt_orders,
         )
         
         # Build phase status
@@ -437,7 +508,13 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                 messages = [m for m in messages if m is not None]
             elif current_prompt_index < total_prompts:
                 # Continue with current phase
-                next_prompt = phase_prompts[current_prompt_index]
+                if not ordered_phase_prompts:
+                    phase_prompts = prompt_builder.get_phase_prompts(current_phase)
+                    order, phase_prompt_orders = _ensure_phase_prompt_order(
+                        phase_prompts, current_phase, phase_prompt_orders
+                    )
+                    ordered_phase_prompts = _prompts_for_order(phase_prompts, order)
+                next_prompt = ordered_phase_prompts[current_prompt_index]
                 messages = prompt_builder.build_phase_guided_messages(
                     context=context,
                     user_message=request.message,
@@ -445,7 +522,9 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                     phase=current_phase,
                     prompts_answered=current_prompt_index,
                     total_prompts=total_prompts,
-                    next_prompt=next_prompt,
+                    current_prompt=next_prompt,
+                    followups_used_for_prompt=followups_used,
+                    min_followups_before_advance=MIN_FOLLOWUPS_BEFORE_ADVANCE,
                 )
             else:
                 # Shouldn't happen, but fallback
@@ -486,7 +565,9 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                     phase=current_phase,
                     prompts_answered=answered_capped,
                     total_prompts=total_prompts,
-                    next_prompt=next_prompt,
+                    current_prompt=next_prompt,
+                    followups_used_for_prompt=0,
+                    min_followups_before_advance=MIN_FOLLOWUPS_BEFORE_ADVANCE,
                 )
         else:
             # Free-form chat mode (not in guided phase mode)

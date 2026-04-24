@@ -24,6 +24,22 @@ def get_phase_opening_message(phase: int) -> str:
     return template.replace("{first_question}", prompts[0])
 
 
+def get_phase_opening_message_for_question(phase: int, first_question: str | None) -> str:
+    """Return opening message, injecting an explicit first question when provided."""
+    cfg = prompt_store.get_config()
+    opening_msgs = cfg.get("phase_opening_messages", {})
+    template = opening_msgs.get(str(phase), "")
+    fallback = opening_msgs.get(
+        "fallback", "Hey! I'm really glad you're here. Feel free to share whatever's on your mind."
+    )
+    if not template:
+        return fallback
+    question = (first_question or "").strip()
+    if not question:
+        return get_phase_opening_message(phase)
+    return template.replace("{first_question}", question)
+
+
 def _get_cross_phase_bridge_instruction(next_prompt: str) -> str:
     cfg = prompt_store.get_config()
     bridge_map = cfg.get("bridge_instructions", {})
@@ -39,18 +55,30 @@ def build_phase_guided_messages(
     phase: int,
     prompts_answered: int,
     total_prompts: int,
-    next_prompt: str,
+    current_prompt: str,
+    followups_used_for_prompt: int = 0,
+    min_followups_before_advance: int = 2,
+    transition_prompt: str | None = None,
 ) -> list[dict]:
     cfg = prompt_store.get_config()
     system_template = cfg.get("guided_system_prompt", "")
     system_prompt = system_template.replace("{condition}", condition)
 
-    bridge_instruction = _get_cross_phase_bridge_instruction(next_prompt)
-    progress_prompt = (
-        f"[Internal — never quote or show this block to the user] "
-        f"Progress: {prompts_answered}/{total_prompts} topics covered. "
-        f"Next topic to weave into your reply: {next_prompt}"
-    )
+    transition_allowed = followups_used_for_prompt >= min_followups_before_advance
+    target_prompt = (transition_prompt or current_prompt).strip()
+    bridge_instruction = _get_cross_phase_bridge_instruction(target_prompt)
+    if transition_allowed:
+        progress_prompt = (
+            f"[Internal — never quote or show this block to the user] "
+            f"Progress: {prompts_answered}/{total_prompts} topics covered. "
+            f"Topic to weave into your reply: {target_prompt}"
+        )
+    else:
+        progress_prompt = (
+            f"[Internal — never quote or show this block to the user] "
+            f"Progress: {prompts_answered}/{total_prompts} topics covered. "
+            f"Current topic to stay on: {current_prompt}"
+        )
 
     messages = [{"role": "system", "content": system_prompt}]
     if context.strip():
@@ -73,6 +101,16 @@ def build_phase_guided_messages(
             ),
         }
     )
+    if not transition_allowed:
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Do not move to a new scripted topic yet. Ask a clarifying follow-up on the current "
+                    "topic and stay anchored to it."
+                ),
+            }
+        )
     messages.append({"role": "user", "content": user_message})
     return messages
 
@@ -413,7 +451,6 @@ async def maybe_build_followup_override(
     """
     Single LLM assessment (assess_guided_turn) decides skip vs sufficient vs follow-up vs skip-confirm offer.
     """
-    cfg = prompt_store.get_config()
     max_followups = 3
     used_followups = [s.strip().lower() for s in (used_followups_for_prompt or []) if str(s).strip()]
     guided_mode = current_required_prompt is not None
@@ -499,6 +536,42 @@ async def maybe_build_followup_override(
     if followups_used_for_prompt >= max_followups and guided_mode:
         effort_result["followup_cap_reached"] = True
     return None, effort_result
+
+
+def build_forced_followup_question(
+    current_required_prompt: str | None,
+    used_followups_for_prompt: list[str] | None = None,
+) -> str:
+    """Deterministic fallback follow-up when advancing is gated by minimum follow-ups."""
+    used = {s.strip().lower() for s in (used_followups_for_prompt or []) if str(s).strip()}
+    if current_required_prompt:
+        candidates = [
+            f"I'm curious -- what's one specific thing that stands out to you about {current_required_prompt.lower()}?",
+            "Could you share one concrete example so I can understand that better?",
+            "If you picture this clearly, what detail feels most important to you?",
+        ]
+    else:
+        candidates = [
+            "I'm curious -- what's one specific detail that stands out to you?",
+            "Could you share one concrete example so I can understand that better?",
+            "If you picture this clearly, what detail feels most important to you?",
+        ]
+    for candidate in candidates:
+        if candidate.strip().lower() not in used:
+            return candidate
+    return "What's one thing that first comes to mind for you?"
+
+
+def build_skip_transition_message(next_topic: str | None) -> str:
+    cfg = prompt_store.get_config()
+    template = str(
+        cfg.get("skip_transition_template")
+        or "That's totally fine -- let's talk about this instead: {next_topic}"
+    ).strip()
+    topic = (next_topic or "").strip()
+    if not topic:
+        return "That's totally fine. We can move forward whenever you're ready."
+    return template.replace("{next_topic}", topic)
 
 
 async def extract_memories_from_conversation(

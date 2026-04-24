@@ -1,6 +1,6 @@
 # AI Companion Research Platform
 
-A web-based chatbot designed to study how AI memory persistence and user control affect user interaction and perception. This platform implements a 2×2 factorial experimental design to investigate the effects of memory persistence (session vs. persistent) and user control (automatic vs. user-controlled) on user trust, privacy, and disclosure.
+A web-based chatbot designed to study how AI memory persistence and user control affect user interaction and perception. The current study runs with three research conditions covering session-only memory, persistent automatic memory, and persistent user-controlled memory.
 
 ## Architecture
 
@@ -11,12 +11,11 @@ A web-based chatbot designed to study how AI memory persistence and user control
 
 ## Experimental Conditions
 
-The platform implements a 2×2 factorial design with four experimental conditions:
+The platform currently uses three experimental conditions:
 
 1. **SESSION_AUTO** (Session + Automatic): Memory lasts only for one chat session, automatically extracted
-2. **SESSION_USER** (Session + User-Controlled): User selects items to save, but memory resets after session
-3. **PERSISTENT_AUTO** (Persistent + Automatic): All memories automatically stored and persist across sessions
-4. **PERSISTENT_USER** (Persistent + User-Controlled): User approves which memories persist across sessions
+2. **PERSISTENT_AUTO** (Persistent + Automatic): All memories automatically stored and persist across sessions
+3. **PERSISTENT_USER** (Persistent + User-Controlled): User approves which memories persist across sessions
 
 ## Quick Start
 
@@ -102,7 +101,7 @@ The frontend will be available at http://localhost:3000
 
 - ✅ **User Authentication**: Secure registration and login system
 - ✅ **Chat Interface**: Real-time chat with AI companion using Server-Sent Events (SSE) for streaming responses
-- ✅ **Experimental Conditions**: Four distinct memory conditions (2×2 factorial design)
+- ✅ **Experimental Conditions**: Three research conditions aligned with the live study flow
 - ✅ **Memory Management**: 
   - Automatic memory extraction from conversations
   - User-controlled memory approval/rejection/editing (for user-controlled conditions)

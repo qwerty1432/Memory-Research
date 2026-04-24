@@ -12,7 +12,7 @@ def seed_test_data():
     db = SessionLocal()
     try:
         # Create test users for each condition
-        conditions = ["SESSION_AUTO", "SESSION_USER", "PERSISTENT_AUTO", "PERSISTENT_USER"]
+        conditions = ["SESSION_AUTO", "PERSISTENT_AUTO", "PERSISTENT_USER"]
         
         for i, condition in enumerate(conditions):
             username = f"test_{condition.lower()}"

@@ -56,6 +56,9 @@ def validate_password(password: str) -> tuple[bool, str]:
     return True, ""
 
 
+VALID_CONDITIONS = ["SESSION_AUTO", "PERSISTENT_AUTO", "PERSISTENT_USER"]
+
+
 def create_user(db: Session, user_data: UserCreate, condition_id: str = "SESSION_AUTO") -> User:
     """Create a new user"""
     # Validate password
@@ -72,9 +75,8 @@ def create_user(db: Session, user_data: UserCreate, condition_id: str = "SESSION
     final_condition_id = user_data.condition_id or condition_id
     
     # Validate condition_id
-    valid_conditions = ["SESSION_AUTO", "SESSION_USER", "PERSISTENT_AUTO", "PERSISTENT_USER"]
-    if final_condition_id not in valid_conditions:
-        raise ValueError(f"Invalid condition_id. Must be one of: {', '.join(valid_conditions)}")
+    if final_condition_id not in VALID_CONDITIONS:
+        raise ValueError(f"Invalid condition_id. Must be one of: {', '.join(VALID_CONDITIONS)}")
     
     user = User(
         user_id=uuid.uuid4(),
@@ -110,7 +112,7 @@ def get_user_by_qualtrics_id(db: Session, qualtrics_id: str) -> User | None:
 
 def assign_condition_round_robin(db: Session) -> str:
     """Assign experimental condition using round-robin rotation"""
-    conditions = ["SESSION_AUTO", "SESSION_USER", "PERSISTENT_AUTO", "PERSISTENT_USER"]
+    conditions = VALID_CONDITIONS
     
     # Count existing Qualtrics users to determine next condition
     qualtrics_user_count = db.query(User).filter(User.qualtrics_id.isnot(None)).count()
@@ -132,9 +134,8 @@ def create_qualtrics_user(db: Session, qualtrics_id: str, condition_id: str = No
         condition_id = assign_condition_round_robin(db)
     
     # Validate condition_id
-    valid_conditions = ["SESSION_AUTO", "SESSION_USER", "PERSISTENT_AUTO", "PERSISTENT_USER"]
-    if condition_id not in valid_conditions:
-        raise ValueError(f"Invalid condition_id. Must be one of: {', '.join(valid_conditions)}")
+    if condition_id not in VALID_CONDITIONS:
+        raise ValueError(f"Invalid condition_id. Must be one of: {', '.join(VALID_CONDITIONS)}")
     
     # Generate username and random password (user won't need to login)
     username = f"qualtrics_{qualtrics_id}"

@@ -8,10 +8,26 @@ from ..models import Session as SessionModel
 from ..models import Message
 from uuid import UUID, uuid4
 from datetime import datetime
+import random
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 security = HTTPBasic()
 QUALTRICS_PHASE_EVENT = "qualtrics_phase_session"
+
+
+def _build_phase_prompt_orders(phase: int) -> dict[str, list[int]]:
+    prompts = prompt_builder.get_phase_prompts(phase)
+    order = list(range(len(prompts)))
+    random.shuffle(order)
+    return {str(phase): order}
+
+
+def _opening_for_phase_with_order(phase: int, orders: dict[str, list[int]]) -> str:
+    prompts = prompt_builder.get_phase_prompts(phase)
+    order = orders.get(str(phase), [])
+    if not prompts or not order or len(order) != len(prompts):
+        return prompt_builder.get_phase_opening_message(phase)
+    return prompt_builder.get_phase_opening_message_for_question(phase, prompts[order[0]])
 
 
 def _extract_session_phase_map(db: Session, user_id: UUID) -> dict[str, int]:
@@ -169,6 +185,7 @@ def qualtrics_authenticate(
             else:
                 # No progress found, initialize at phase 1
                 phase = 1
+                phase_prompt_orders = _build_phase_prompt_orders(1)
                 # Initialize progress state
                 logging.log_progress_update(
                     db,
@@ -180,6 +197,7 @@ def qualtrics_authenticate(
                     used_followups_for_prompt=[],
                     phase_complete=False,
                     study_complete=False,
+                    phase_prompt_orders=phase_prompt_orders,
                 )
                 # Add phase opening message if session is empty
                 assistant_count = (
@@ -194,7 +212,7 @@ def qualtrics_authenticate(
                     phase_opening = Message(
                         session_id=new_session.session_id,
                         role="assistant",
-                        content=prompt_builder.get_phase_opening_message(1),
+                        content=_opening_for_phase_with_order(1, phase_prompt_orders),
                     )
                     db.add(phase_opening)
                     db.commit()
@@ -212,6 +230,7 @@ def qualtrics_authenticate(
             db.commit()
             db.refresh(new_session)
             logging.log_session_started(db, user.user_id, new_session.session_id)
+            phase_prompt_orders = _build_phase_prompt_orders(1)
             
             # Initialize progress state
             logging.log_progress_update(
@@ -224,13 +243,14 @@ def qualtrics_authenticate(
                 used_followups_for_prompt=[],
                 phase_complete=False,
                 study_complete=False,
+                phase_prompt_orders=phase_prompt_orders,
             )
             
             # Add phase opening message
             phase_opening = Message(
                 session_id=new_session.session_id,
                 role="assistant",
-                content=prompt_builder.get_phase_opening_message(1),
+                content=_opening_for_phase_with_order(1, phase_prompt_orders),
             )
             db.add(phase_opening)
             db.commit()

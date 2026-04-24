@@ -6,8 +6,6 @@ interface ConditionBannerProps {
 
 const CONDITION_MESSAGES: Record<string, string> = {
   SESSION_AUTO: 'This companion will only use your memory in this session.',
-  SESSION_USER:
-    'This companion will only use your memory in this session. You can review or alter it in Menu -> Memory.',
   PERSISTENT_AUTO: 'This companion may use memory from this and future sessions.',
   PERSISTENT_USER:
     'This companion may use memory across sessions. You can review or alter it in Menu -> Memory.',

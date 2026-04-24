@@ -37,7 +37,7 @@ const INTERNAL_SECTIONS: SectionDef[] = [
 // ---------------------------------------------------------------------------
 // Study-simulation test chat
 // ---------------------------------------------------------------------------
-const CONDITION_OPTIONS = ['SESSION_AUTO', 'SESSION_USER', 'PERSISTENT_AUTO', 'PERSISTENT_USER'] as const;
+const CONDITION_OPTIONS = ['SESSION_AUTO', 'PERSISTENT_AUTO', 'PERSISTENT_USER'] as const;
 
 function StudyChat() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -172,7 +172,7 @@ function StudyChat() {
             onChange={(e) => handleConditionChange(e.target.value)}
             disabled={!userId || bootstrapping}
             className="text-xs border border-gray-300 rounded-lg px-2 py-1 bg-white max-w-[10rem]"
-            title="Memory behavior: use SESSION_USER or PERSISTENT_USER to approve/edit memories"
+            title="Memory behavior: use PERSISTENT_USER to approve/edit memories"
           >
             {CONDITION_OPTIONS.map((c) => (
               <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>

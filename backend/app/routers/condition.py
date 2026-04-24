@@ -8,7 +8,6 @@ router = APIRouter(prefix="/condition", tags=["condition"])
 
 CONDITION_DESCRIPTIONS = {
     "SESSION_AUTO": "Your conversation will not be saved after this session ends.",
-    "SESSION_USER": "You can review saved memories, but they will be cleared after this session ends.",
     "PERSISTENT_AUTO": "Your conversation is automatically saved and will persist in future sessions.",
     "PERSISTENT_USER": "You can choose which information to save, edit, or delete, and it will persist in future sessions."
 }
@@ -35,7 +34,7 @@ def update_condition(
     is_developer: bool = False  # This would be checked via auth in production
 ):
     """Update user condition (developer/admin only)"""
-    valid_conditions = ["SESSION_AUTO", "SESSION_USER", "PERSISTENT_AUTO", "PERSISTENT_USER"]
+    valid_conditions = ["SESSION_AUTO", "PERSISTENT_AUTO", "PERSISTENT_USER"]
     if not condition_id or condition_id not in valid_conditions:
         raise HTTPException(
             status_code=400,

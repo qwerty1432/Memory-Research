@@ -12,7 +12,6 @@ interface DeveloperModeToggleProps {
 
 const CONDITIONS = [
   { id: 'SESSION_AUTO', label: 'Session + Auto' },
-  { id: 'SESSION_USER', label: 'Session + User' },
   { id: 'PERSISTENT_AUTO', label: 'Persistent + Auto' },
   { id: 'PERSISTENT_USER', label: 'Persistent + User' },
 ];

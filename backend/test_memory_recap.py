@@ -58,10 +58,10 @@ class MemoryRecapTests(unittest.TestCase):
         self.assertEqual([x.text for x in r2], ["p2"])
 
     def test_session_recap_excludes_null_phase(self):
-        uid = self._add_user("SESSION_USER")
+        uid = self._add_user("SESSION_AUTO")
         sid = self._add_session(uid)
         create_memory_candidate(uid, sid, "legacy", self.db, is_active=True, phase=None)
-        r = get_memory_recap(uid, sid, 1, "SESSION_USER", self.db)
+        r = get_memory_recap(uid, sid, 1, "SESSION_AUTO", self.db)
         self.assertEqual(r, [])
 
     def test_persistent_recap_cumulative(self):

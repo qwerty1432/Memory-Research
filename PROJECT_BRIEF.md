@@ -6,12 +6,13 @@ Concise context for contributors (e.g. Codex). **Day-to-day iteration is: push t
 
 ## Purpose
 
-Research chatbot platform studying how **memory persistence** and **user control** affect trust, privacy perception, and disclosure. Implements a **2×2 factorial** design with four conditions:
+Research chatbot platform studying how **memory persistence** and **user control** affect trust, privacy perception, and disclosure. The live study currently uses three conditions:
 
 - `SESSION_AUTO`
-- `SESSION_USER`
 - `PERSISTENT_AUTO`
 - `PERSISTENT_USER`
+
+The legacy `SESSION_USER` arm is no longer active. Existing rows from that arm should be migrated to `PERSISTENT_USER` with `backend/migrate_conditions.py`.
 
 Participants primarily experience the study through **Qualtrics** (iframe embed). Researchers also use the **playground** (`/playground`) for testing; it hits the same backend behavior as production when sending `phase: null` (single-block mode).
 

@@ -17,7 +17,6 @@ def get_context(user_id: UUID, session_id: UUID, condition: str, db: Session) ->
     """
     Get context based on condition:
     - SESSION_AUTO: Recent messages from current session
-    - SESSION_USER: User-approved temporary memories from current session
     - PERSISTENT_AUTO: All active memories for user
     - PERSISTENT_USER: User-approved persistent memories
     """
@@ -32,26 +31,6 @@ def get_context(user_id: UUID, session_id: UUID, condition: str, db: Session) ->
             Message.session_id == normalized_session_id
         ).order_by(desc(Message.created_at)).limit(10).all()
         messages.reverse()  # Oldest first
-        
-        for msg in messages:
-            context_parts.append(f"{msg.role.capitalize()}: {msg.content}")
-    
-    elif condition == "SESSION_USER":
-        # Get user-approved memories from current session
-        memories = db.query(Memory).filter(
-            Memory.user_id == normalized_user_id,
-            Memory.session_id == normalized_session_id,
-            Memory.is_active == True
-        ).order_by(desc(Memory.created_at)).limit(20).all()
-        
-        for memory in memories:
-            context_parts.append(f"Memory: {memory.text}")
-        
-        # Also include recent messages
-        messages = db.query(Message).filter(
-            Message.session_id == normalized_session_id
-        ).order_by(desc(Message.created_at)).limit(5).all()
-        messages.reverse()
         
         for msg in messages:
             context_parts.append(f"{msg.role.capitalize()}: {msg.content}")
@@ -208,7 +187,7 @@ def get_memory_recap(
     """
     Active memories for phase-end recap.
 
-    SESSION_*: current session only, phase == until_phase. Rows with phase NULL are excluded.
+    SESSION_AUTO: current session only, phase == until_phase. Rows with phase NULL are excluded.
     PERSISTENT_*: user-wide active memories with phase <= until_phase, or phase IS NULL (legacy).
     """
     if until_phase not in (1, 2, 3):
@@ -222,7 +201,7 @@ def get_memory_recap(
         Memory.is_active == True,
     )
 
-    if condition_id in ("SESSION_AUTO", "SESSION_USER"):
+    if condition_id == "SESSION_AUTO":
         q = q.filter(
             Memory.session_id == normalized_session_id,
             Memory.phase == until_phase,

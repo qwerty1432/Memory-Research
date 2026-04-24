@@ -180,6 +180,7 @@ def log_progress_update(
     study_complete: bool,
     pending_skip_confirmation: bool = False,
     skip_confirmation_sent: bool = False,
+    phase_prompt_orders: dict[str, list[int]] | None = None,
 ):
     """
     Log progress state update for single-block multi-phase flow.
@@ -196,6 +197,7 @@ def log_progress_update(
         "study_complete": study_complete,
         "pending_skip_confirmation": pending_skip_confirmation,
         "skip_confirmation_sent": skip_confirmation_sent,
+        "phase_prompt_orders": phase_prompt_orders or {},
     }
     log_event(db, "progress_update", user_id, payload)
 

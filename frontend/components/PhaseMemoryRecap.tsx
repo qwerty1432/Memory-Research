@@ -31,6 +31,17 @@ export default function PhaseMemoryRecap({
 
   const isUserControlled = conditionId.includes('USER');
   const disclaimer = getConditionDisclaimer(conditionId);
+  const isPersistent = conditionId.startsWith('PERSISTENT');
+  const headerTone = isUserControlled
+    ? 'bg-[#efe8ff] border-[#d7c6ff] text-[#4d2f83]'
+    : 'bg-[#f4f0ff] border-[#e2d8ff] text-[#5f4c84]';
+  const modeTitle = isUserControlled ? 'Your memory controls' : 'Automatic memory mode';
+  const modeSummary = isUserControlled
+    ? 'You can edit or remove what carries forward.'
+    : 'Memories are saved automatically and shown as read-only.';
+  const phaseSummary = isPersistent
+    ? `These memories can carry across sessions through phase ${untilPhase}.`
+    : `These memories are from this session only (phase ${untilPhase}).`;
 
   const load = useCallback(async () => {
     if (!visible || !userId || !sessionId || untilPhase < 1 || untilPhase > 3) {
@@ -83,10 +94,20 @@ export default function PhaseMemoryRecap({
   if (!visible) return null;
 
   return (
-    <div className="px-4 py-3 border-t border-[#e8e0f5] bg-[#faf8ff]">
-      <h3 className="text-sm font-semibold text-[#1a1a1a] mb-1">
-        Memories from phase {untilPhase}
-      </h3>
+    <div className="px-4 py-4 border-t border-[#e8e0f5] bg-[#faf8ff]">
+      <div className={`rounded-xl border px-3 py-2 mb-3 ${headerTone}`}>
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold">{modeTitle}</h3>
+          <span className="text-[11px] font-medium uppercase tracking-wide">
+            Phase {untilPhase} recap
+          </span>
+        </div>
+        <p className="text-xs mt-1">{modeSummary}</p>
+      </div>
+      <h4 className="text-sm font-semibold text-[#1a1a1a] mb-1">
+        Saved memories
+      </h4>
+      <p className="text-xs text-gray-600 mb-1">{phaseSummary}</p>
       <p className="text-xs text-gray-600 mb-3">{disclaimer}</p>
 
       {loading && <p className="text-xs text-gray-500">Loading recap…</p>}
@@ -97,11 +118,11 @@ export default function PhaseMemoryRecap({
       )}
 
       {!loading && memories.length > 0 && (
-        <div className="space-y-2 max-h-48 overflow-y-auto">
+        <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
           {memories.map((memory) => (
             <div
               key={memory.memory_id}
-              className={`glass-card rounded-xl p-3 ${memory.is_active ? 'bg-[#f3edff]' : 'bg-white/80'}`}
+              className={`rounded-xl border p-3 shadow-sm ${memory.is_active ? 'bg-[#f3edff] border-[#dfd0ff]' : 'bg-white/90 border-white/70'}`}
             >
               {isUserControlled && editingId === memory.memory_id ? (
                 <div className="space-y-2">
@@ -136,14 +157,14 @@ export default function PhaseMemoryRecap({
                 <>
                   <p className="text-sm text-[#1a1a1a]">{memory.text}</p>
                   {isUserControlled && (
-                    <div className="flex gap-3 mt-1 text-xs">
+                    <div className="flex gap-3 mt-2 text-xs">
                       <button
                         type="button"
                         onClick={() => {
                           setEditingId(memory.memory_id);
                           setEditText(memory.text);
                         }}
-                        className="text-[#d4c5a9] hover:underline"
+                        className="text-[#6c4c99] hover:underline"
                       >
                         Edit
                       </button>

@@ -19,7 +19,7 @@ def get_memory_recap(
     """
     Phase-end recap: active memories only.
 
-    SESSION_AUTO / SESSION_USER: current session, ``phase == until_phase`` (NULL phase excluded).
+    SESSION_AUTO: current session, ``phase == until_phase`` (NULL phase excluded).
 
     PERSISTENT_AUTO / PERSISTENT_USER: user-wide, ``phase <= until_phase`` or ``phase`` NULL (legacy).
     """
