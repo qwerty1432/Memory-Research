@@ -574,6 +574,43 @@ def build_skip_transition_message(next_topic: str | None) -> str:
     return template.replace("{next_topic}", topic)
 
 
+def has_natural_language_skip_intent(user_message: str) -> bool:
+    """
+    Lightweight semantic fallback for skip/move-on intent.
+    Used only as a reconciliation layer when LLM assessment is inconsistent.
+    """
+    t = _normalize_text_for_match(user_message)
+    if not t:
+        return False
+
+    phrase_hits = [
+        "move on",
+        "move to the next",
+        "next topic",
+        "next question",
+        "next one",
+        "skip this",
+        "skip this question",
+        "pass on this",
+        "rather not answer",
+        "dont want to answer",
+        "do not want to answer",
+        "can we continue",
+        "go to the next",
+        "continue to the next",
+    ]
+    if any(p in t for p in phrase_hits):
+        return True
+
+    tokens = set(t.split())
+    # Conservative lexical fallback: require two-word evidence.
+    if "pass" in tokens and ("question" in tokens or "topic" in tokens):
+        return True
+    if "skip" in tokens and ("question" in tokens or "topic" in tokens or "next" in tokens):
+        return True
+    return False
+
+
 async def extract_memories_from_conversation(
     user_message: str,
     existing_memories: list[str] = None

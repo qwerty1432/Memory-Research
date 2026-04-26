@@ -16,6 +16,58 @@ from sse_starlette.sse import EventSourceResponse
 router = APIRouter(prefix="/chat", tags=["chat"])
 QUALTRICS_PHASE_EVENT = "qualtrics_phase_session"
 MIN_FOLLOWUPS_BEFORE_ADVANCE = 2
+MAX_FOLLOWUPS_PER_PROMPT = 3
+MAX_BG_EXTRACTION_TASKS = int(os.getenv("MAX_BG_EXTRACTION_TASKS", "2"))
+_bg_extraction_semaphore = asyncio.Semaphore(MAX_BG_EXTRACTION_TASKS)
+MAX_CONCURRENT_CHAT_REQUESTS = int(os.getenv("MAX_CONCURRENT_CHAT_REQUESTS", "24"))
+CHAT_CONCURRENCY_ACQUIRE_TIMEOUT_SEC = float(
+    os.getenv("CHAT_CONCURRENCY_ACQUIRE_TIMEOUT_SEC", "0.25")
+)
+SKIP_BG_EXTRACTION_WHEN_CHAT_SATURATED = (
+    os.getenv("SKIP_BG_EXTRACTION_WHEN_CHAT_SATURATED", "true").strip().lower() == "true"
+)
+_chat_request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHAT_REQUESTS)
+GUIDED_DEBUG_LOGS = (os.getenv("GUIDED_DEBUG_LOGS", "false").strip().lower() == "true")
+SKIP_RECONCILIATION_ENABLED = (
+    os.getenv("SKIP_RECONCILIATION_ENABLED", "true").strip().lower() == "true"
+)
+
+
+async def _run_memory_extraction_limited(
+    user_id: UUID,
+    session_id: UUID,
+    user_msg: str,
+    cond: str,
+    memory_phase: int | None,
+):
+    acquired = False
+    try:
+        await asyncio.wait_for(_bg_extraction_semaphore.acquire(), timeout=0.2)
+        acquired = True
+    except TimeoutError:
+        print("[Chat] bg extraction skipped: worker limit reached")
+        return
+
+    bg_db = SessionLocal()
+    try:
+        existing_memories = memory_manager.get_all_existing_memories(user_id, session_id, bg_db)
+        memory_candidates_text = await prompt_builder.extract_memories_from_conversation(
+            user_msg, existing_memories
+        )
+        for candidate_text in memory_candidates_text:
+            if not memory_manager.check_memory_duplicate(candidate_text, user_id, session_id, bg_db):
+                auto_activate = cond in ["SESSION_AUTO", "PERSISTENT_AUTO"]
+                memory_manager.create_memory_candidate(
+                    user_id, session_id, candidate_text, bg_db, is_active=auto_activate,
+                    phase=memory_phase,
+                )
+    except Exception as e:
+        # Avoid recursive DB pressure by not writing another event when pool is saturated.
+        print(f"[Chat] bg extraction error: {e}")
+    finally:
+        bg_db.close()
+        if acquired:
+            _bg_extraction_semaphore.release()
 
 
 @router.get("/progress", response_model=schemas.PhaseStatus)
@@ -258,6 +310,15 @@ def _update_progress_state(
 @router.post("", response_model=schemas.ChatResponse)
 async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
     """Handle chat message and return response"""
+    if _chat_request_semaphore.locked():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Chat service is temporarily overloaded. "
+                "Please retry in a few seconds."
+            ),
+        )
+
     # Verify user exists
     user = db.query(models.User).filter(models.User.user_id == request.user_id).first()
     if not user:
@@ -356,6 +417,20 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
             # Resolved skip-vs-continue dialog (stay, skip, substantive reply, or clarifying follow-up).
             pending_skip_confirmation = False
 
+        # Reconciliation layer: if the LLM assessment misses clear move-on intent, coerce to skip.
+        if (
+            SKIP_RECONCILIATION_ENABLED
+            and
+            effort_result is not None
+            and not pending_skip_confirmation
+            and not effort_result.get("user_skip", False)
+            and prompt_builder.has_natural_language_skip_intent(request.message)
+        ):
+            effort_result["user_skip"] = True
+            effort_result["assessment_reconciled_skip"] = True
+            effort_result["needs_followup"] = False
+            followup_override = None
+
         print(f"[Chat] effort_check: {time.time()-t_effort:.1f}s | override={'yes' if followup_override else 'no'}")
         if effort_result is not None:
             logging.log_effort_check(
@@ -395,26 +470,61 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                 elif effort_result is None:
                     # Defensive: should not happen after maybe_build_followup_override
                     should_advance_prompt = False
-                elif not effort_result.get("needs_followup", False):
-                    # Sufficient answer, explicit skip, or "keep going" after a skip check — advance
-                    # only when they are not explicitly staying on the same prompt.
-                    if effort_result.get("resume_after_skip_prompt"):
+                else:
+                    user_skip = bool(effort_result.get("user_skip", False))
+                    resume_after_skip_prompt = bool(
+                        effort_result.get("resume_after_skip_prompt", False)
+                    )
+                    needs_followup = bool(effort_result.get("needs_followup", False))
+
+                    # 1) Explicit/confirmed skip can always advance.
+                    if user_skip:
+                        should_advance_prompt = True
+                    # 2) "Keep going" from skip confirmation must stay on current topic.
+                    elif resume_after_skip_prompt:
                         should_advance_prompt = False
-                    elif effort_result.get("user_skip"):
-                        should_advance_prompt = True
-                    elif followups_used >= MIN_FOLLOWUPS_BEFORE_ADVANCE:
-                        should_advance_prompt = True
+                    # 3) Insufficient answer: ask follow-up up to cap; then force advance.
+                    elif needs_followup:
+                        if followups_used >= MAX_FOLLOWUPS_PER_PROMPT:
+                            should_advance_prompt = True
+                        else:
+                            followup_override = (
+                                effort_result.get("followup_question")
+                                or prompt_builder.build_forced_followup_question(
+                                    current_required_prompt,
+                                    used_followups_for_prompt,
+                                )
+                            )
+                            effort_result["needs_followup"] = True
+                            effort_result["followup_question"] = followup_override
+                            should_advance_prompt = False
+                    # 4) Sufficient answer: require 2 follow-ups before advancing.
                     else:
-                        followup_override = prompt_builder.build_forced_followup_question(
-                            current_required_prompt,
-                            used_followups_for_prompt,
-                        )
-                        effort_result["needs_followup"] = True
-                        effort_result["followup_question"] = followup_override
-                        should_advance_prompt = False
-                elif effort_result.get("followup_cap_reached", False):
-                    # Hit follow-up cap - force advance even if insufficient
-                    should_advance_prompt = True
+                        if followups_used < MIN_FOLLOWUPS_BEFORE_ADVANCE:
+                            followup_override = prompt_builder.build_forced_followup_question(
+                                current_required_prompt,
+                                used_followups_for_prompt,
+                            )
+                            effort_result["needs_followup"] = True
+                            effort_result["followup_question"] = followup_override
+                            should_advance_prompt = False
+                        else:
+                            should_advance_prompt = True
+            # Invariant guardrail: do not allow a stalled turn with no follow-up and no advance.
+            if (
+                ran_followup_check
+                and not should_advance_prompt
+                and followup_override is None
+                and effort_result is not None
+                and not effort_result.get("user_skip", False)
+                and not effort_result.get("resume_after_skip_prompt", False)
+            ):
+                followup_override = prompt_builder.build_forced_followup_question(
+                    current_required_prompt,
+                    used_followups_for_prompt,
+                )
+                effort_result["needs_followup"] = True
+                effort_result["followup_question"] = followup_override
             # If followup_override is not None, we're asking a follow-up - don't advance
             
             if should_advance_prompt:
@@ -444,10 +554,27 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                         study_complete = True
             elif followup_override is not None:
                 # Asking a follow-up - increment counter but stay on same prompt
-                followups_used += 1
+                followups_used = min(followups_used + 1, MAX_FOLLOWUPS_PER_PROMPT)
                 used_followups_for_prompt = used_followups_for_prompt + [followup_override]
         
         # Update progress state (always update, even if asking follow-up)
+        if GUIDED_DEBUG_LOGS:
+            logging.log_event(
+                db,
+                "guided_progress_decision",
+                request.user_id,
+                {
+                    "session_id": str(request.session_id),
+                    "current_phase": current_phase,
+                    "current_prompt_index": current_prompt_index,
+                    "total_prompts": total_prompts,
+                    "should_advance_prompt": bool(should_advance_prompt),
+                    "followups_used_for_prompt": followups_used,
+                    "assessment_outcome": (effort_result or {}).get("assessment_outcome"),
+                    "user_skip": bool((effort_result or {}).get("user_skip")),
+                    "needs_followup": bool((effort_result or {}).get("needs_followup")),
+                },
+            )
         _update_progress_state(
             db,
             request.user_id,
@@ -618,37 +745,26 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
     
     # Fire-and-forget: extract memories in the background so the user
     # gets the chat response immediately without waiting for a third LLM call.
-    async def _extract_memories_bg(user_id, session_id, user_msg, cond, memory_phase: int | None):
-        bg_db = SessionLocal()
-        try:
-            existing_memories = memory_manager.get_all_existing_memories(user_id, session_id, bg_db)
-            memory_candidates_text = await prompt_builder.extract_memories_from_conversation(
-                user_msg, existing_memories
-            )
-            for candidate_text in memory_candidates_text:
-                if not memory_manager.check_memory_duplicate(candidate_text, user_id, session_id, bg_db):
-                    auto_activate = cond in ["SESSION_AUTO", "PERSISTENT_AUTO"]
-                    mem = memory_manager.create_memory_candidate(
-                        user_id, session_id, candidate_text, bg_db, is_active=auto_activate,
-                        phase=memory_phase,
-                    )
-                    if auto_activate:
-                        logging.log_memory_approved(bg_db, user_id, mem.memory_id)
-                    else:
-                        logging.log_memory_created(bg_db, user_id, mem.memory_id)
-        except Exception as e:
-            logging.log_error(bg_db, "error_memory_extraction", user_id, str(e))
-        finally:
-            bg_db.close()
-
     extraction_phase = current_phase if current_phase in (1, 2, 3) else None
-    asyncio.create_task(_extract_memories_bg(
-        request.user_id, request.session_id, request.message, condition, extraction_phase,
-    ))
+    if SKIP_BG_EXTRACTION_WHEN_CHAT_SATURATED and _chat_request_semaphore.locked():
+        print("[Chat] bg extraction skipped: chat concurrency saturated")
+    else:
+        asyncio.create_task(
+            _run_memory_extraction_limited(
+                request.user_id,
+                request.session_id,
+                request.message,
+                condition,
+                extraction_phase,
+            )
+        )
 
     all_candidates = memory_manager.get_memory_candidates(request.user_id, request.session_id, db)
 
-    print(f"[Chat] TOTAL: {time.time()-t_start:.1f}s | phase={current_phase} prompt_idx={current_prompt_index}")
+    print(
+        f"[Chat] TOTAL: {time.time()-t_start:.1f}s | "
+        f"phase={current_phase} prompt_idx={current_prompt_index}"
+    )
 
     return {
         "response": response_text,
