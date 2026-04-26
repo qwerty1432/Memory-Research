@@ -155,9 +155,9 @@ def build_messages(context: str, user_message: str) -> list[dict]:
 def get_skip_confirmation_prompt_text() -> str:
     cfg = prompt_store.get_config()
     default = (
-        "I'm not totally sure I understood — were you hoping to move on to the **next "
-        "question**, or would you like to **stay on this one** and share more when you're "
-        "ready? Either is fine. You can say **next** to skip, or **keep going** to stay."
+        "I'm not totally sure I understood — were you hoping to move on to the next "
+        "question, or would you like to stay on this one and share more when you're "
+        "ready? Either is fine. You can say next to skip, or keep going to stay."
     )
     return str(cfg.get("skip_confirmation_prompt") or default).strip() or default
 
