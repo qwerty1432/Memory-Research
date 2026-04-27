@@ -194,6 +194,125 @@ def _normalize_text_for_match(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _content_tokens(text: str) -> list[str]:
+    t = _normalize_text_for_match(text)
+    if not t:
+        return []
+    stop = {
+        "the", "a", "an", "and", "or", "but", "to", "of", "in", "on", "for", "with",
+        "is", "are", "was", "were", "be", "i", "you", "your", "my", "it", "that", "this",
+    }
+    return [tok for tok in t.split() if len(tok) >= 3 and tok not in stop]
+
+
+def _looks_generic_followup(text: str) -> bool:
+    t = _normalize_text_for_match(text)
+    if not t:
+        return True
+    generic_markers = (
+        "tell me more",
+        "say more",
+        "share more",
+        "anything else",
+        "what stands out",
+        "what comes to mind",
+        "can you elaborate",
+        "could you elaborate",
+    )
+    return any(m in t for m in generic_markers)
+
+
+def _includes_user_detail(followup_text: str, user_message: str) -> bool:
+    fq = _normalize_text_for_match(followup_text)
+    um = _normalize_text_for_match(user_message)
+    if not fq or not um:
+        return False
+    # Strong check for very short user replies (e.g., "friends", "christmas").
+    if len(um.split()) <= 2:
+        return um in fq
+    # Otherwise token overlap is enough for anchoring.
+    user_tokens = set(_content_tokens(user_message))
+    follow_tokens = set(_content_tokens(followup_text))
+    return bool(user_tokens and (user_tokens & follow_tokens))
+
+
+async def generate_anchored_followup_for_short_answer(
+    *,
+    current_required_prompt: str,
+    user_message: str,
+    last_assistant_prompt: str | None = None,
+) -> str | None:
+    """
+    Generate one LLM follow-up for short valid answers.
+    Must reference the user's exact detail; no deterministic template fallback.
+    """
+    from .genai_client import call_genai
+
+    cfg = prompt_store.get_config()
+    base_system = str(
+        cfg.get("short_answer_followup_system")
+        or (
+            "You are a warm conversational partner. Write exactly one follow-up question. "
+            "It must reference the user's latest answer directly and stay on the current topic."
+        )
+    ).strip()
+    user_payload = (
+        "Current topic:\n"
+        f"{json.dumps((current_required_prompt or '').strip()[:1200])}\n\n"
+        "Last assistant message:\n"
+        f"{json.dumps((last_assistant_prompt or '').strip()[:1200])}\n\n"
+        "User latest answer:\n"
+        f"{json.dumps((user_message or '').strip()[:300])}\n\n"
+        "Output rules:\n"
+        "- Return exactly one conversational follow-up question.\n"
+        "- Include the user's detail from the latest answer.\n"
+        "- Stay on this same topic only.\n"
+        "- Do not introduce any new scripted topic.\n"
+        "- No preface text, no bullets, no quotes."
+    )
+
+    async def _ask(system_text: str) -> str:
+        out = await call_genai(
+            [
+                {"role": "system", "content": system_text},
+                {"role": "user", "content": user_payload},
+            ],
+            stream=False,
+            temperature=0.0,
+            max_tokens=120,
+        )
+        return (out or "").strip()
+
+    try:
+        first = await _ask(base_system)
+    except Exception:
+        return None
+
+    first = _normalize_guided_followup_question(first, current_required_prompt).strip()
+    if (
+        first
+        and _includes_user_detail(first, user_message)
+        and not _looks_generic_followup(first)
+    ):
+        return first[:220].rstrip()
+
+    # One stricter LLM retry (still no deterministic fallback).
+    strict_system = (
+        base_system
+        + "\nStrict requirement: your question must explicitly include the user's exact phrase "
+        + json.dumps((user_message or "").strip()[:120])
+        + "."
+    )
+    try:
+        second = await _ask(strict_system)
+    except Exception:
+        return None
+    second = _normalize_guided_followup_question(second, current_required_prompt).strip()
+    if second and _includes_user_detail(second, user_message):
+        return second[:220].rstrip()
+    return None
+
+
 def _followup_semantic_signature(text: str) -> str:
     """
     Build a coarse semantic signature for follow-up dedupe.

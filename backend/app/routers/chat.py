@@ -11,6 +11,7 @@ import os
 import json
 import time
 import random
+import re
 from sse_starlette.sse import EventSourceResponse
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -31,6 +32,23 @@ GUIDED_DEBUG_LOGS = (os.getenv("GUIDED_DEBUG_LOGS", "false").strip().lower() == 
 SKIP_RECONCILIATION_ENABLED = (
     os.getenv("SKIP_RECONCILIATION_ENABLED", "true").strip().lower() == "true"
 )
+
+
+def _is_short_valid_answer(user_message: str, effort_result: dict | None) -> bool:
+    if not effort_result:
+        return False
+    if effort_result.get("assessment_outcome") != "sufficient":
+        return False
+    if effort_result.get("user_skip") or effort_result.get("resume_after_skip_prompt"):
+        return False
+    relevance = int(effort_result.get("relevance_score", 0) or 0)
+    if relevance < 2:
+        return False
+    text = (user_message or "").strip()
+    if not text:
+        return False
+    words = [w for w in re.split(r"\s+", text) if w]
+    return len(words) <= 2
 
 
 async def _run_memory_extraction_limited(
@@ -482,6 +500,18 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                         should_advance_prompt = True
                     # 2) "Keep going" from skip confirmation must stay on current topic.
                     elif resume_after_skip_prompt:
+                        should_advance_prompt = False
+                    # 2.5) Short valid answer gate: require one LLM-anchored follow-up before advancing.
+                    elif followups_used == 0 and _is_short_valid_answer(request.message, effort_result):
+                        forced_llm_followup = await prompt_builder.generate_anchored_followup_for_short_answer(
+                            current_required_prompt=current_required_prompt or "",
+                            user_message=request.message,
+                            last_assistant_prompt=last_assistant.content if last_assistant else None,
+                        )
+                        if forced_llm_followup:
+                            followup_override = forced_llm_followup
+                            effort_result["needs_followup"] = True
+                            effort_result["followup_question"] = forced_llm_followup
                         should_advance_prompt = False
                     # 3) Insufficient answer: ask follow-up up to cap; then advance.
                     elif needs_followup:

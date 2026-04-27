@@ -421,6 +421,70 @@ async def scenario_mixed_turn_bleed_guardrail(
     )
 
 
+async def scenario_short_answer_anchor_gratitude(
+    client: httpx.AsyncClient, base: str, cond: str
+) -> ScenarioResult:
+    auth = await _auth(client, base)
+    uid, sid = str(auth["user_id"]), str(auth["session_id"])
+    await _set_condition(client, base, uid, cond)
+
+    # Navigate by natural-language skip until the assistant transition mentions gratitude.
+    at_target = False
+    for _ in range(8):
+        r = await _chat(client, base, uid, sid, "Can we move to the next topic?")
+        if _norm("For what in your life do you feel most grateful?") in _norm(r.get("response") or ""):
+            at_target = True
+            break
+
+    r = await _chat(client, base, uid, sid, "friends")
+    response_text = (r.get("response") or "").strip()
+    low = _norm(response_text)
+    anchored = "friends" in low
+    generic_only = ("tell me more" in low or "what stands out" in low) and not anchored
+    passed = at_target and anchored and not generic_only
+    return ScenarioResult(
+        condition=cond,
+        scenario="short_answer_anchor_gratitude",
+        passed=passed,
+        severity="high",
+        details="Short valid gratitude answer should get a same-topic follow-up that explicitly references user detail.",
+        repro="Navigate to gratitude prompt -> send 'friends' -> verify follow-up includes 'friends'.",
+        observed={"at_target": at_target, "response": response_text[:280], "anchored": anchored, "generic_only": generic_only},
+    )
+
+
+async def scenario_short_answer_anchor_holiday(
+    client: httpx.AsyncClient, base: str, cond: str
+) -> ScenarioResult:
+    auth = await _auth(client, base)
+    uid, sid = str(auth["user_id"]), str(auth["session_id"])
+    await _set_condition(client, base, uid, cond)
+
+    # Navigate by natural-language skip until the assistant transition mentions holiday.
+    at_target = False
+    for _ in range(8):
+        r = await _chat(client, base, uid, sid, "Can we move to the next topic?")
+        if _norm("What is your favorite holiday? Why?") in _norm(r.get("response") or ""):
+            at_target = True
+            break
+
+    r = await _chat(client, base, uid, sid, "christmas")
+    response_text = (r.get("response") or "").strip()
+    low = _norm(response_text)
+    anchored = "christmas" in low
+    generic_only = ("tell me more" in low or "what stands out" in low) and not anchored
+    passed = at_target and anchored and not generic_only
+    return ScenarioResult(
+        condition=cond,
+        scenario="short_answer_anchor_holiday",
+        passed=passed,
+        severity="high",
+        details="Short valid holiday answer should get a same-topic follow-up that explicitly references user detail.",
+        repro="Navigate to holiday prompt -> send 'christmas' -> verify follow-up includes 'christmas'.",
+        observed={"at_target": at_target, "response": response_text[:280], "anchored": anchored, "generic_only": generic_only},
+    )
+
+
 async def scenario_refresh_stability(client: httpx.AsyncClient, base: str, cond: str) -> ScenarioResult:
     auth = await _auth(client, base)
     uid, sid = str(auth["user_id"]), str(auth["session_id"])
@@ -592,6 +656,8 @@ async def run_condition_suite(client: httpx.AsyncClient, base: str, cond: str) -
     results.append(await scenario_min_followups_gate(client, base, cond))
     results.append(await scenario_skip_natural_language(client, base, cond))
     results.append(await scenario_mixed_turn_bleed_guardrail(client, base, cond))
+    results.append(await scenario_short_answer_anchor_gratitude(client, base, cond))
+    results.append(await scenario_short_answer_anchor_holiday(client, base, cond))
     results.append(await scenario_refresh_stability(client, base, cond))
     results.append(await scenario_phase_transition_and_recap(client, base, cond))
     results.append(await scenario_intent_equivalence_repeat(client, base, cond))
