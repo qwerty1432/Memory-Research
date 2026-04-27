@@ -194,6 +194,35 @@ def _normalize_text_for_match(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _followup_semantic_signature(text: str) -> str:
+    """
+    Build a coarse semantic signature for follow-up dedupe.
+    Prevents re-asking near-identical prompts with slight wording changes.
+    """
+    t = _normalize_text_for_match(text)
+    if not t:
+        return ""
+    stop = {
+        "i", "m", "im", "you", "your", "to", "the", "a", "an", "and", "or", "but",
+        "that", "this", "it", "is", "are", "was", "were", "be", "can", "could",
+        "would", "should", "what", "which", "who", "why", "how", "one", "about",
+        "share", "specific", "thing", "stands", "out", "curious", "detail", "first",
+        "comes", "mind", "picture", "concrete", "example", "understand", "better",
+    }
+    tokens = [tok for tok in t.split() if tok not in stop and len(tok) > 2]
+    if not tokens:
+        return t
+    # Keep ordered unique tokens to preserve broad intent while dampening style differences.
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for tok in tokens:
+        if tok in seen:
+            continue
+        seen.add(tok)
+        uniq.append(tok)
+    return " ".join(uniq[:8])
+
+
 def _strip_leading_echo_prefix(followup_question: str, current_required_prompt: str) -> str:
     """
     Remove lead-ins that restate the full current prompt, e.g.:
@@ -453,6 +482,11 @@ async def maybe_build_followup_override(
     """
     max_followups = 3
     used_followups = [s.strip().lower() for s in (used_followups_for_prompt or []) if str(s).strip()]
+    used_signatures = {
+        _followup_semantic_signature(s)
+        for s in used_followups
+        if _followup_semantic_signature(s)
+    }
     guided_mode = current_required_prompt is not None
     if not guided_mode:
         pending_skip_confirmation = False
@@ -509,7 +543,8 @@ async def maybe_build_followup_override(
                 followup_question, current_required_prompt
             )
         normalized = followup_question.strip().lower()
-        if normalized in used_followups:
+        followup_sig = _followup_semantic_signature(followup_question)
+        if normalized in used_followups or (followup_sig and followup_sig in used_signatures):
             if current_required_prompt:
                 fallbacks = [
                     f"I'm curious -- what's one specific thing that stands out to you about {current_required_prompt.lower()}?",
@@ -523,7 +558,9 @@ async def maybe_build_followup_override(
                     "If you picture it vividly, what jumps out first?",
                 ]
             for fb in fallbacks:
-                if fb.strip().lower() not in used_followups:
+                fb_norm = fb.strip().lower()
+                fb_sig = _followup_semantic_signature(fb)
+                if fb_norm not in used_followups and (not fb_sig or fb_sig not in used_signatures):
                     followup_question = fb
                     break
         if not followup_question.strip():

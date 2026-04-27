@@ -501,13 +501,21 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                     # 4) Sufficient answer: require 2 follow-ups before advancing.
                     else:
                         if followups_used < MIN_FOLLOWUPS_BEFORE_ADVANCE:
-                            followup_override = prompt_builder.build_forced_followup_question(
-                                current_required_prompt,
-                                used_followups_for_prompt,
-                            )
-                            effort_result["needs_followup"] = True
-                            effort_result["followup_question"] = followup_override
-                            should_advance_prompt = False
+                            relevance_score = int(effort_result.get("relevance_score", 0) or 0)
+                            effort_score = int(effort_result.get("effort_score", 0) or 0)
+                            clearly_answered = relevance_score >= 2 and effort_score >= 2
+                            if clearly_answered:
+                                # If the user already gave a clear on-topic answer, avoid forcing a
+                                # generic follow-up loop just to satisfy minimum follow-up count.
+                                should_advance_prompt = True
+                            else:
+                                followup_override = prompt_builder.build_forced_followup_question(
+                                    current_required_prompt,
+                                    used_followups_for_prompt,
+                                )
+                                effort_result["needs_followup"] = True
+                                effort_result["followup_question"] = followup_override
+                                should_advance_prompt = False
                         else:
                             should_advance_prompt = True
             # Invariant guardrail: do not allow a stalled turn with no follow-up and no advance.
@@ -516,6 +524,7 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                 and not should_advance_prompt
                 and followup_override is None
                 and effort_result is not None
+                and effort_result.get("needs_followup", False)
                 and not effort_result.get("user_skip", False)
                 and not effort_result.get("resume_after_skip_prompt", False)
             ):
