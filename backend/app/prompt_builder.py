@@ -218,6 +218,11 @@ def _looks_generic_followup(text: str) -> bool:
         "what comes to mind",
         "can you elaborate",
         "could you elaborate",
+        "please elaborate",
+        "provide more detail",
+        "in what way",
+        "could you clarify",
+        "would you clarify",
     )
     return any(m in t for m in generic_markers)
 
@@ -252,8 +257,10 @@ async def generate_anchored_followup_for_short_answer(
     base_system = str(
         cfg.get("short_answer_followup_system")
         or (
-            "You are a warm conversational partner. Write exactly one follow-up question. "
-            "It must reference the user's latest answer directly and stay on the current topic."
+            "You are a warm, curious conversation partner — not an interviewer. "
+            "Respond in plain spoken language. You may give one short genuine reaction, "
+            "then exactly one open question. Include the user's detail from their latest answer "
+            "and stay on the current topic only."
         )
     ).strip()
     user_payload = (
@@ -264,27 +271,28 @@ async def generate_anchored_followup_for_short_answer(
         "User latest answer:\n"
         f"{json.dumps((user_message or '').strip()[:300])}\n\n"
         "Output rules:\n"
-        "- Return exactly one conversational follow-up question.\n"
-        "- Include the user's detail from the latest answer.\n"
-        "- Stay on this same topic only.\n"
-        "- Do not introduce any new scripted topic.\n"
-        "- No preface text, no bullets, no quotes."
+        "- Write only what the user sees.\n"
+        "- Include their detail so it's obvious you're responding to what they said.\n"
+        "- Optional: one brief warm reaction (one clause), then exactly one question — still only one question total.\n"
+        "- Stay on this topic only; do not introduce any other scripted topic.\n"
+        "- Sound human and natural; avoid stiff or form-like phrasing.\n"
+        "- No bullets, numbering, or meta-commentary."
     )
 
-    async def _ask(system_text: str) -> str:
+    async def _ask(system_text: str, *, temperature: float = 0.35) -> str:
         out = await call_genai(
             [
                 {"role": "system", "content": system_text},
                 {"role": "user", "content": user_payload},
             ],
             stream=False,
-            temperature=0.0,
-            max_tokens=120,
+            temperature=temperature,
+            max_tokens=140,
         )
         return (out or "").strip()
 
     try:
-        first = await _ask(base_system)
+        first = await _ask(base_system, temperature=0.35)
     except Exception:
         return None
 
@@ -304,7 +312,7 @@ async def generate_anchored_followup_for_short_answer(
         + "."
     )
     try:
-        second = await _ask(strict_system)
+        second = await _ask(strict_system, temperature=0.15)
     except Exception:
         return None
     second = _normalize_guided_followup_question(second, current_required_prompt).strip()
