@@ -498,24 +498,17 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                             effort_result["needs_followup"] = True
                             effort_result["followup_question"] = followup_override
                             should_advance_prompt = False
-                    # 4) Sufficient answer: require 2 follow-ups before advancing.
+                    # 4) Sufficient answer: still require minimum follow-up depth
+                    #    for normal conversational flow (unless explicit skip).
                     else:
                         if followups_used < MIN_FOLLOWUPS_BEFORE_ADVANCE:
-                            relevance_score = int(effort_result.get("relevance_score", 0) or 0)
-                            effort_score = int(effort_result.get("effort_score", 0) or 0)
-                            clearly_answered = relevance_score >= 2 and effort_score >= 2
-                            if clearly_answered:
-                                # If the user already gave a clear on-topic answer, avoid forcing a
-                                # generic follow-up loop just to satisfy minimum follow-up count.
-                                should_advance_prompt = True
-                            else:
-                                followup_override = prompt_builder.build_forced_followup_question(
-                                    current_required_prompt,
-                                    used_followups_for_prompt,
-                                )
-                                effort_result["needs_followup"] = True
-                                effort_result["followup_question"] = followup_override
-                                should_advance_prompt = False
+                            followup_override = prompt_builder.build_forced_followup_question(
+                                current_required_prompt,
+                                used_followups_for_prompt,
+                            )
+                            effort_result["needs_followup"] = True
+                            effort_result["followup_question"] = followup_override
+                            should_advance_prompt = False
                         else:
                             should_advance_prompt = True
             # Invariant guardrail: do not allow a stalled turn with no follow-up and no advance.
