@@ -545,29 +545,10 @@ async def maybe_build_followup_override(
         normalized = followup_question.strip().lower()
         followup_sig = _followup_semantic_signature(followup_question)
         if normalized in used_followups or (followup_sig and followup_sig in used_signatures):
-            if current_required_prompt:
-                fallbacks = [
-                    f"I'm curious -- what's one specific thing that stands out to you about {current_required_prompt.lower()}?",
-                    "What's a concrete example that comes to mind?",
-                    "If you picture it vividly, what detail jumps out first?",
-                ]
-            else:
-                fallbacks = [
-                    "What's one specific thing that stands out?",
-                    "What's a concrete example that comes to mind?",
-                    "If you picture it vividly, what jumps out first?",
-                ]
-            for fb in fallbacks:
-                fb_norm = fb.strip().lower()
-                fb_sig = _followup_semantic_signature(fb)
-                if fb_norm not in used_followups and (not fb_sig or fb_sig not in used_signatures):
-                    followup_question = fb
-                    break
-        if not followup_question.strip():
-            followup_question = "What's one thing that first comes to mind for you?"
+            followup_question = ""
         effort_result["needs_followup"] = True
         effort_result["followup_question"] = followup_question
-        return followup_question, effort_result
+        return (followup_question if followup_question else None), effort_result
 
     # sufficient (and free-chat sufficient path)
     if followups_used_for_prompt >= max_followups and guided_mode:

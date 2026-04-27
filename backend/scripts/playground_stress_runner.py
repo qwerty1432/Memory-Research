@@ -338,29 +338,28 @@ async def scenario_min_followups_gate(client: httpx.AsyncClient, base: str, cond
     p0 = await _progress(client, base, uid, sid)
     idx0 = int(p0.get("current_prompt_index", 0))
 
-    r1 = await _chat(client, base, uid, sid, "My perfect day starts with a walk, coffee, and a long conversation with a friend.")
+    r1 = await _chat(client, base, uid, sid, "neil de grasse tyson")
     s1 = r1.get("phase_status") or {}
-    r2 = await _chat(client, base, uid, sid, "After that I'd read and cook dinner with family.")
-    s2 = r2.get("phase_status") or {}
-    r3 = await _chat(client, base, uid, sid, "On rainy days I'd do the same indoors with music.")
-    s3 = r3.get("phase_status") or {}
+    response_text = (r1.get("response") or "").strip()
+    low = _norm(response_text)
 
-    # Invariant: should not jump immediately on turn 1 before minimum follow-up depth.
-    no_early_advance = int(s1.get("current_prompt_index", idx0)) == idx0
-    followup_depth_visible = int(s3.get("followups_used_for_prompt", 0)) >= 2
-    passed = no_early_advance and followup_depth_visible
+    # Guardrails: no prompt-echo artifacts and no doubled terminal punctuation.
+    echoes_dinner_prompt = "this one s fun imagine you could invite absolutely anyone to dinner" in low
+    has_double_q = "??" in response_text
+    passed = (not echoes_dinner_prompt) and (not has_double_q)
     return ScenarioResult(
         condition=cond,
-        scenario="min_followups_gate",
+        scenario="followup_artifact_guardrail",
         passed=passed,
         severity="high",
-        details="No prompt advance on first substantive turn and follow-up depth reaches >=2.",
-        repro="Send 3 substantive on-topic replies from fresh guided session; inspect phase_status progression.",
+        details="Follow-up turns should not echo full scripted prompts or produce deterministic punctuation artifacts.",
+        repro="Fresh session -> answer with a short concrete detail (e.g., 'neil de grasse tyson') -> inspect response text.",
         observed={
             "start_idx": idx0,
             "t1": s1,
-            "t2": s2,
-            "t3": s3,
+            "response": response_text[:280],
+            "echoes_dinner_prompt": echoes_dinner_prompt,
+            "has_double_question_mark": has_double_q,
         },
     )
 
@@ -385,6 +384,40 @@ async def scenario_skip_natural_language(client: httpx.AsyncClient, base: str, c
         details="Natural-language skip should advance topic and produce a clear transition acknowledgement.",
         repro="Fresh session -> send natural-language move-on intent -> verify index increments and bridge wording.",
         observed={"start_idx": idx0, "end_idx": idx1, "bridge_like": bridge, "response": (r.get("response") or "")[:240]},
+    )
+
+
+async def scenario_mixed_turn_bleed_guardrail(
+    client: httpx.AsyncClient, base: str, cond: str
+) -> ScenarioResult:
+    auth = await _auth(client, base)
+    uid, sid = str(auth["user_id"]), str(auth["session_id"])
+    await _set_condition(client, base, uid, cond)
+
+    r = await _chat(client, base, uid, sid, "neil de grasse tyson")
+    response_text = (r.get("response") or "").strip()
+    low = _norm(response_text)
+
+    contains_gratitude_prompt = _norm("For what in your life do you feel most grateful?") in low
+    likely_followup_shape = ("what" in low and "you" in low and "?" in response_text)
+    has_two_questions = response_text.count("?") >= 2
+
+    mixed_turn = contains_gratitude_prompt and likely_followup_shape and has_two_questions
+    passed = not mixed_turn
+    return ScenarioResult(
+        condition=cond,
+        scenario="mixed_turn_bleed_guardrail",
+        passed=passed,
+        severity="critical",
+        details="Single turn should not contain both a follow-up and a next scripted topic question.",
+        repro="Fresh session -> answer dinner guest prompt with a short concrete detail -> inspect assistant reply for mixed-turn bleed.",
+        observed={
+            "response": response_text[:320],
+            "contains_gratitude_prompt": contains_gratitude_prompt,
+            "has_two_questions": has_two_questions,
+            "likely_followup_shape": likely_followup_shape,
+            "mixed_turn": mixed_turn,
+        },
     )
 
 
@@ -558,6 +591,7 @@ async def run_condition_suite(client: httpx.AsyncClient, base: str, cond: str) -
     results: list[ScenarioResult] = []
     results.append(await scenario_min_followups_gate(client, base, cond))
     results.append(await scenario_skip_natural_language(client, base, cond))
+    results.append(await scenario_mixed_turn_bleed_guardrail(client, base, cond))
     results.append(await scenario_refresh_stability(client, base, cond))
     results.append(await scenario_phase_transition_and_recap(client, base, cond))
     results.append(await scenario_intent_equivalence_repeat(client, base, cond))

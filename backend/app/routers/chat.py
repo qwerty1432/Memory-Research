@@ -483,50 +483,21 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                     # 2) "Keep going" from skip confirmation must stay on current topic.
                     elif resume_after_skip_prompt:
                         should_advance_prompt = False
-                    # 3) Insufficient answer: ask follow-up up to cap; then force advance.
+                    # 3) Insufficient answer: ask follow-up up to cap; then advance.
                     elif needs_followup:
                         if followups_used >= MAX_FOLLOWUPS_PER_PROMPT:
                             should_advance_prompt = True
                         else:
-                            followup_override = (
-                                effort_result.get("followup_question")
-                                or prompt_builder.build_forced_followup_question(
-                                    current_required_prompt,
-                                    used_followups_for_prompt,
-                                )
-                            )
-                            effort_result["needs_followup"] = True
-                            effort_result["followup_question"] = followup_override
+                            followup_question = str(
+                                effort_result.get("followup_question") or ""
+                            ).strip()
+                            if followup_question:
+                                followup_override = followup_question
+                                effort_result["followup_question"] = followup_question
                             should_advance_prompt = False
-                    # 4) Sufficient answer: still require minimum follow-up depth
-                    #    for normal conversational flow (unless explicit skip).
+                    # 4) Sufficient answer: allow natural progression.
                     else:
-                        if followups_used < MIN_FOLLOWUPS_BEFORE_ADVANCE:
-                            followup_override = prompt_builder.build_forced_followup_question(
-                                current_required_prompt,
-                                used_followups_for_prompt,
-                            )
-                            effort_result["needs_followup"] = True
-                            effort_result["followup_question"] = followup_override
-                            should_advance_prompt = False
-                        else:
-                            should_advance_prompt = True
-            # Invariant guardrail: do not allow a stalled turn with no follow-up and no advance.
-            if (
-                ran_followup_check
-                and not should_advance_prompt
-                and followup_override is None
-                and effort_result is not None
-                and effort_result.get("needs_followup", False)
-                and not effort_result.get("user_skip", False)
-                and not effort_result.get("resume_after_skip_prompt", False)
-            ):
-                followup_override = prompt_builder.build_forced_followup_question(
-                    current_required_prompt,
-                    used_followups_for_prompt,
-                )
-                effort_result["needs_followup"] = True
-                effort_result["followup_question"] = followup_override
+                        should_advance_prompt = True
             # If followup_override is not None, we're asking a follow-up - don't advance
             
             if should_advance_prompt:
