@@ -225,22 +225,23 @@ export const memoryAPI = {
 };
 
 // Prompts API (Prompt Playground)
+/** Keys edited in Prompt Playground; GET /prompts may include additional legacy fields from the server. */
 export interface PromptConfig {
   phase_question_banks: Record<string, string[]>;
   phase_opening_messages: Record<string, string>;
   guided_system_prompt: string;
   phase_completion_prompt: string;
-  free_chat_prompt_extroverted: string;
-  free_chat_prompt_neutral: string;
   bridge_instructions: Record<string, string>;
+  /** Shown when skip intent is ambiguous (plain text; avoid markdown). */
+  skip_confirmation_prompt: string;
+  /** Shown after a confirmed skip before the next topic; use {next_topic}. */
+  skip_transition_template: string;
   guided_turn_assessment_system?: string;
   guided_turn_assessment_user_template?: string;
-  effort_assessment_system: string;
-  effort_assessment_user_template: string;
+  /** System prompt for the extra LLM call that generates anchored follow-ups for very short (e.g. 1–2 word) answers. */
+  short_answer_followup_system?: string;
   memory_extraction_system: string;
   memory_extraction_user_template: string;
-  followup_variants_with_prompt: string[];
-  followup_variants_without_prompt: string[];
 }
 
 export const promptsAPI = {

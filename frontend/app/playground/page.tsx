@@ -6,7 +6,7 @@ import MemoryReviewPanel from '@/components/MemoryReviewPanel';
 import PhaseMemoryRecap from '@/components/PhaseMemoryRecap';
 
 // ---------------------------------------------------------------------------
-// Section config — only prompts used in the guided study flow
+// Section config — matches backend prompt keys used by guided /chat (phase null)
 // ---------------------------------------------------------------------------
 interface SectionDef {
   key: keyof PromptConfig;
@@ -21,15 +21,36 @@ const CONVERSATION_SECTIONS: SectionDef[] = [
   { key: 'guided_system_prompt', label: 'Guided Chat System Prompt', description: 'The main personality and behavior instructions sent to the LLM on every guided conversation turn. This is the most impactful prompt to tune — it controls tone, style, and constraints. Use {condition} for the memory condition.', type: 'textarea' },
   { key: 'phase_completion_prompt', label: 'Phase Completion Prompt', description: 'Sent as the system prompt when the participant finishes the last question of the entire study (phase 3 complete). Use {phase} for the phase number.', type: 'textarea' },
   { key: 'bridge_instructions', label: 'Bridge Instructions', description: 'Optional instructions that help the companion connect a new topic to something the participant shared earlier. Each key is a question (lowercase), and the value is the bridging instruction added to the system prompt when context from prior answers exists.', type: 'string-map' },
-  { key: 'followup_variants_with_prompt', label: 'Follow-up Variants (with prompt)', description: 'Canned follow-up messages used when a participant gives a very short or generic answer to a specific question. These are cycled in order before the system falls back to LLM-based assessment.', type: 'string-list' },
-  { key: 'followup_variants_without_prompt', label: 'Follow-up Variants (without prompt)', description: 'Same as above, but used in free-form chat when there is no specific required question active.', type: 'string-list' },
+];
+
+/** Wording the participant may see when skipping or moving to the next scripted topic after a skip. */
+const SKIP_AND_TRANSITION_SECTIONS: SectionDef[] = [
+  {
+    key: 'skip_confirmation_prompt',
+    label: 'Skip confirmation (ambiguous move-on)',
+    description:
+      'Plain text shown when the user might want to skip but intent is unclear. They reply to confirm skip vs stay. Keep it readable without markdown (the UI does not render bold).',
+    type: 'textarea',
+  },
+  {
+    key: 'skip_transition_template',
+    label: 'Skip transition (next topic)',
+    description:
+      'Message shown after a confirmed skip when introducing the next scripted question. Use the placeholder {next_topic} where the next question text should appear.',
+    type: 'textarea',
+  },
 ];
 
 const INTERNAL_SECTIONS: SectionDef[] = [
   { key: 'guided_turn_assessment_system', label: 'Guided Turn Assessment — System', description: 'System message for the unified LLM call that decides skip vs sufficient vs follow-up vs skip-confirmation (JSON).', type: 'textarea' },
   { key: 'guided_turn_assessment_user_template', label: 'Guided Turn Assessment — User Template', description: 'Template with placeholders: guided_interview_mode, pending_skip_confirmation, skip_confirmation_sent, followups_used, max_followups, at_followup_cap, current_topic, last_assistant_prompt, user_response.', type: 'textarea' },
-  { key: 'effort_assessment_system', label: 'Effort Assessment — System (legacy)', description: 'Legacy; guided flow uses guided_turn_assessment_* instead.', type: 'textarea' },
-  { key: 'effort_assessment_user_template', label: 'Effort Assessment — User Template (legacy)', description: 'Legacy free-chat wrapper; guided flow uses guided_turn_assessment_*.', type: 'textarea' },
+  {
+    key: 'short_answer_followup_system',
+    label: 'Short-answer anchored follow-up — System',
+    description:
+      'Used only for an extra LLM call when the user gives a very short but valid answer (often 1–2 words). Shapes tone and rules for that single follow-up; it must stay on the current topic and reference the user’s words. Does not replace the Guided Chat System Prompt for normal turns.',
+    type: 'textarea',
+  },
   { key: 'memory_extraction_system', label: 'Memory Extraction — System', description: 'System message for the LLM call that extracts factual memories from participant messages after each turn.', type: 'textarea' },
   { key: 'memory_extraction_user_template', label: 'Memory Extraction — User Template', description: 'The extraction prompt that tells the LLM what to pull from the user\'s message. Use {user_message} and {existing_context} as placeholders.', type: 'textarea' },
 ];
@@ -570,7 +591,15 @@ export default function PlaygroundPage() {
             ))}
           </SectionGroup>
 
-          <SectionGroup title="Internal LLM Prompts" subtitle="Affect follow-up decisions and memory extraction (not directly visible to participants)">
+          <SectionGroup title="Skip and transition" subtitle="Participant-visible wording when skipping is unclear or after a confirmed skip">
+            {SKIP_AND_TRANSITION_SECTIONS.map(sec => (
+              <Section key={sec.key} title={sec.label} description={sec.description}>
+                {renderSection(sec)}
+              </Section>
+            ))}
+          </SectionGroup>
+
+          <SectionGroup title="Internal LLM Prompts" subtitle="Classification, short-answer follow-ups, and memory extraction (mostly not shown verbatim to participants)">
             {INTERNAL_SECTIONS.map(sec => (
               <Section key={sec.key} title={sec.label} description={sec.description}>
                 {renderSection(sec)}
