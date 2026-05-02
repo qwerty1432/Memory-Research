@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Memory, memoryAPI } from '@/lib/api';
 import { getConditionDisclaimer } from '@/lib/conditionDisclaimer';
 
@@ -32,8 +32,16 @@ export default function MemoryReviewPanel({
   const isUserControlled = conditionId.includes('USER');
   const memoryDisclaimer = getConditionDisclaimer(conditionId);
 
+  // Tracks which pending memory ids we've already auto-selected once. Lets us
+  // pre-tick newly arriving candidates without overriding the user's explicit
+  // deselections on memories they've already seen.
+  const autoSelectedRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     if (isOpen) {
+      // Reset the auto-selection memory each time the panel opens so we
+      // re-seed selection from the freshly loaded memories.
+      autoSelectedRef.current = new Set();
       loadMemories();
     }
   }, [isOpen, userId, sessionId]);
@@ -48,6 +56,25 @@ export default function MemoryReviewPanel({
       });
     }
   }, [candidates]);
+
+  // For PERSISTENT_USER, pre-select every newly observed pending memory so the
+  // user can simply hit "Save" instead of ticking each one. Covers both the
+  // initial loadMemories() hydration and subsequent candidate arrivals via the
+  // setMemories effect above.
+  useEffect(() => {
+    if (!isUserControlled) return;
+    const pendingIds = memories
+      .filter((m) => !m.is_active)
+      .map((m) => m.memory_id)
+      .filter((id) => !autoSelectedRef.current.has(id));
+    if (pendingIds.length === 0) return;
+    pendingIds.forEach((id) => autoSelectedRef.current.add(id));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      pendingIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }, [memories, isUserControlled]);
 
   const loadMemories = async () => {
     try {

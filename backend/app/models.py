@@ -29,6 +29,10 @@ class Session(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     ended_at = Column(DateTime(timezone=True), nullable=True)
+    # Snapshot of the user's condition at session creation time. Used so cleanup_session_memories
+    # is gated on the condition the session ran under, not whatever the user was switched to later.
+    # Nullable so legacy session rows (pre-migration) keep working with a runtime fallback.
+    condition_id = Column(String(50), nullable=True)
 
     # Relationships
     user = relationship("User", back_populates="sessions")

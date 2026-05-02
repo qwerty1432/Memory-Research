@@ -181,11 +181,25 @@ def log_progress_update(
     pending_skip_confirmation: bool = False,
     skip_confirmation_sent: bool = False,
     phase_prompt_orders: dict[str, list[int]] | None = None,
+    name_collected: bool = True,
+    preferred_name: str | None = None,
+    transition_bridge: bool = False,
 ):
     """
     Log progress state update for single-block multi-phase flow.
+
     Stores: current_phase, current_prompt_index, followups_used_for_prompt, phase_complete,
     study_complete, pending_skip_confirmation, skip_confirmation_sent.
+
+    The ``name_collected`` / ``preferred_name`` keys carry the result of the
+    one-time name-collection turn that runs at the start of a fresh session
+    (Issue 7). They default to a "name already handled" state so legacy
+    sessions and resumed flows are unaffected.
+
+    The ``transition_bridge`` key is a research-instrumentation flag (Issue 2):
+    set to ``True`` when the assistant's reply for this turn was steered by a
+    cross-topic bridge instruction so analyses can distinguish bridge-introduction
+    turns from clarifying follow-ups in the event log.
     """
     payload = {
         "session_id": str(session_id),
@@ -198,6 +212,9 @@ def log_progress_update(
         "pending_skip_confirmation": pending_skip_confirmation,
         "skip_confirmation_sent": skip_confirmation_sent,
         "phase_prompt_orders": phase_prompt_orders or {},
+        "name_collected": name_collected,
+        "preferred_name": preferred_name,
+        "transition_bridge": transition_bridge,
     }
     log_event(db, "progress_update", user_id, payload)
 

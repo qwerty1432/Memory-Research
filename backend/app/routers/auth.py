@@ -8,7 +8,6 @@ from ..models import Session as SessionModel
 from ..models import Message
 from uuid import UUID, uuid4
 from datetime import datetime
-import random
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 security = HTTPBasic()
@@ -18,7 +17,6 @@ QUALTRICS_PHASE_EVENT = "qualtrics_phase_session"
 def _build_phase_prompt_orders(phase: int) -> dict[str, list[int]]:
     prompts = prompt_builder.get_phase_prompts(phase)
     order = list(range(len(prompts)))
-    random.shuffle(order)
     return {str(phase): order}
 
 
@@ -183,10 +181,13 @@ def qualtrics_authenticate(
                 # Resume from saved progress
                 phase = progress.get("current_phase", 1)
             else:
-                # No progress found, initialize at phase 1
+                # No progress found, initialize at phase 1.
+                # New sessions begin with the name-collection turn before the
+                # first scripted topic question (Issue 7).
                 phase = 1
                 phase_prompt_orders = _build_phase_prompt_orders(1)
-                # Initialize progress state
+                # Initialize progress state with name_collected=False so the
+                # first /chat message will run the name-extraction short-circuit.
                 logging.log_progress_update(
                     db,
                     user.user_id,
@@ -198,8 +199,11 @@ def qualtrics_authenticate(
                     phase_complete=False,
                     study_complete=False,
                     phase_prompt_orders=phase_prompt_orders,
+                    name_collected=False,
+                    preferred_name=None,
                 )
-                # Add phase opening message if session is empty
+                # Add the name-collection opening (NOT the phase-1 topic opening).
+                # The phase-1 opening is sent on the next turn by the chat handler.
                 assistant_count = (
                     db.query(Message)
                     .filter(
@@ -212,7 +216,7 @@ def qualtrics_authenticate(
                     phase_opening = Message(
                         session_id=new_session.session_id,
                         role="assistant",
-                        content=_opening_for_phase_with_order(1, phase_prompt_orders),
+                        content=prompt_builder.get_name_collection_opening(),
                     )
                     db.add(phase_opening)
                     db.commit()
@@ -220,19 +224,23 @@ def qualtrics_authenticate(
                         db, user.user_id, new_session.session_id, phase_opening.content
                     )
         else:
-            # No active session, create new one at phase 1
+            # No active session, create new one at phase 1.
+            # Same name-collection-first pattern as above.
             phase = 1
             new_session = SessionModel(
                 session_id=uuid4(),
-                user_id=user.user_id
+                user_id=user.user_id,
+                condition_id=user.condition_id,
             )
             db.add(new_session)
             db.commit()
             db.refresh(new_session)
             logging.log_session_started(db, user.user_id, new_session.session_id)
             phase_prompt_orders = _build_phase_prompt_orders(1)
-            
-            # Initialize progress state
+
+            # Initialize progress state with name_collected=False so the first
+            # /chat message will trigger name extraction and then send the
+            # phase-1 opening as its assistant reply.
             logging.log_progress_update(
                 db,
                 user.user_id,
@@ -244,13 +252,15 @@ def qualtrics_authenticate(
                 phase_complete=False,
                 study_complete=False,
                 phase_prompt_orders=phase_prompt_orders,
+                name_collected=False,
+                preferred_name=None,
             )
-            
-            # Add phase opening message
+
+            # Send the name-collection opening as the first assistant message.
             phase_opening = Message(
                 session_id=new_session.session_id,
                 role="assistant",
-                content=_opening_for_phase_with_order(1, phase_prompt_orders),
+                content=prompt_builder.get_name_collection_opening(),
             )
             db.add(phase_opening)
             db.commit()
@@ -293,7 +303,8 @@ def qualtrics_authenticate(
         # Create new session (legacy phase-specific mode)
         new_session = SessionModel(
             session_id=uuid4(),
-            user_id=user.user_id
+            user_id=user.user_id,
+            condition_id=user.condition_id,
         )
         db.add(new_session)
         db.commit()

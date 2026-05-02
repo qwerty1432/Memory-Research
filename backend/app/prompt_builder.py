@@ -9,7 +9,32 @@ def get_phase_prompts(phase: int) -> list[str]:
     return cfg.get("phase_question_banks", {}).get(str(phase), [])
 
 
-def get_phase_opening_message(phase: int) -> str:
+def _apply_preferred_name(template: str, preferred_name: str | None) -> str:
+    """
+    Replace ``{preferred_name}`` placeholders. When no name is available we
+    fall back to a graceful ", " so any leading "Thanks {preferred_name}, ..."
+    style template still reads naturally without an awkward dangling token.
+    """
+    if "{preferred_name}" not in template:
+        return template
+    name = (preferred_name or "").strip()
+    if name:
+        return template.replace("{preferred_name}", name)
+    # Smooth out common ", {preferred_name}, " / "Thanks {preferred_name}, " patterns.
+    smoothed = template.replace(", {preferred_name},", ",").replace(" {preferred_name},", "")
+    smoothed = smoothed.replace("{preferred_name}", "")
+    return smoothed
+
+
+def get_name_collection_opening() -> str:
+    cfg = prompt_store.get_config()
+    return str(
+        cfg.get("name_collection_opening")
+        or "Hey there! Before we dive in -- what would you like me to call you?"
+    ).strip()
+
+
+def get_phase_opening_message(phase: int, *, preferred_name: str | None = None) -> str:
     cfg = prompt_store.get_config()
     prompts = get_phase_prompts(phase)
     opening_msgs = cfg.get("phase_opening_messages", {})
@@ -21,10 +46,16 @@ def get_phase_opening_message(phase: int) -> str:
     if not template:
         return opening_msgs.get("fallback", "Hey! I'm really glad you're here. Feel free to share whatever's on your mind.")
 
-    return template.replace("{first_question}", prompts[0])
+    rendered = template.replace("{first_question}", prompts[0])
+    return _apply_preferred_name(rendered, preferred_name)
 
 
-def get_phase_opening_message_for_question(phase: int, first_question: str | None) -> str:
+def get_phase_opening_message_for_question(
+    phase: int,
+    first_question: str | None,
+    *,
+    preferred_name: str | None = None,
+) -> str:
     """Return opening message, injecting an explicit first question when provided."""
     cfg = prompt_store.get_config()
     opening_msgs = cfg.get("phase_opening_messages", {})
@@ -36,8 +67,53 @@ def get_phase_opening_message_for_question(phase: int, first_question: str | Non
         return fallback
     question = (first_question or "").strip()
     if not question:
-        return get_phase_opening_message(phase)
-    return template.replace("{first_question}", question)
+        return get_phase_opening_message(phase, preferred_name=preferred_name)
+    rendered = template.replace("{first_question}", question)
+    return _apply_preferred_name(rendered, preferred_name)
+
+
+def extract_preferred_name(user_message: str) -> str | None:
+    """
+    Lightweight heuristic for the user's preferred display name. Used on the
+    first chat turn after the name-collection opening so we can address them
+    naturally without a separate LLM call. Returns ``None`` when nothing
+    plausible can be extracted; callers should fall back gracefully.
+    """
+    text = (user_message or "").strip()
+    if not text:
+        return None
+
+    patterns = [
+        r"(?:you can|please|just|simply)?\s*call\s+me\s+(?:as\s+)?([A-Za-z][A-Za-z'\-\.]{0,30})",
+        r"my\s+(?:friends\s+)?(?:preferred\s+)?name\s+is\s+([A-Za-z][A-Za-z'\-\.]{0,30})",
+        r"i\s*['\u2019]?m\s+([A-Za-z][A-Za-z'\-\.]{0,30})",
+        r"i\s+am\s+([A-Za-z][A-Za-z'\-\.]{0,30})",
+        r"name['\u2019]?s\s+([A-Za-z][A-Za-z'\-\.]{0,30})",
+        r"(?:just|simply)\s+([A-Za-z][A-Za-z'\-\.]{0,30})\s+(?:is\s+fine|is\s+good|works|please)",
+        r"\b([A-Za-z][A-Za-z'\-\.]{0,30})\s+here\b",
+    ]
+    skip_words = {
+        "the", "a", "an", "good", "fine", "ok", "okay", "yes", "no",
+        "hi", "hey", "hello", "yo", "sup", "thanks", "sure",
+    }
+    for pattern in patterns:
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if not m:
+            continue
+        candidate = m.group(1).strip(" .,!?'\"")
+        if candidate and candidate.lower() not in skip_words:
+            return candidate[:1].upper() + candidate[1:]
+
+    # Fallback: short message with no matched pattern. Strip punctuation and
+    # take the first non-greeting token as the candidate name.
+    cleaned = re.sub(r"[^A-Za-z'\-\.\s]", " ", text).strip()
+    tokens = [t for t in cleaned.split() if t]
+    if tokens and len(tokens) <= 4:
+        for tok in tokens:
+            stripped = tok.strip(" .,!?'\"")
+            if stripped and stripped.lower() not in skip_words and len(stripped) <= 30:
+                return stripped[:1].upper() + stripped[1:]
+    return None
 
 
 def _get_cross_phase_bridge_instruction(next_prompt: str) -> str:
@@ -45,6 +121,16 @@ def _get_cross_phase_bridge_instruction(next_prompt: str) -> str:
     bridge_map = cfg.get("bridge_instructions", {})
     normalized = (next_prompt or "").strip().lower()
     return bridge_map.get(normalized, "")
+
+
+def has_bridge_instruction(prompt_text: str | None) -> bool:
+    """
+    Public helper: True when a cross-topic bridge instruction is configured for
+    ``prompt_text`` in ``bridge_instructions``. Used by chat.py to tag progress
+    log events with ``transition_bridge=True`` so research analysis can
+    distinguish bridge-introduction turns from clarifying follow-ups.
+    """
+    return bool(_get_cross_phase_bridge_instruction(prompt_text or ""))
 
 
 def build_phase_guided_messages(
@@ -301,6 +387,7 @@ async def generate_anchored_followup_for_short_answer(
         first
         and _includes_user_detail(first, user_message)
         and not _looks_generic_followup(first)
+        and not _is_bank_question_leak(first, current_required_prompt)
     ):
         return first[:220].rstrip()
 
@@ -316,7 +403,11 @@ async def generate_anchored_followup_for_short_answer(
     except Exception:
         return None
     second = _normalize_guided_followup_question(second, current_required_prompt).strip()
-    if second and _includes_user_detail(second, user_message):
+    if (
+        second
+        and _includes_user_detail(second, user_message)
+        and not _is_bank_question_leak(second, current_required_prompt)
+    ):
         return second[:220].rstrip()
     return None
 
@@ -393,6 +484,34 @@ def _strip_leading_echo_prefix(followup_question: str, current_required_prompt: 
             fq = fq[m.end() :].strip()
             break
     return fq
+
+
+def _is_bank_question_leak(
+    followup_text: str, current_required_prompt: str | None
+) -> bool:
+    """
+    Return True if ``followup_text`` closely echoes a phase-bank question other
+    than ``current_required_prompt``. This guards against the assessment LLM
+    handing back a near-verbatim copy of a different scripted topic, which the
+    chat router would otherwise surface as a ``followup_override`` and bypass
+    the main LLM call entirely.
+    """
+    fq_norm = _normalize_text_for_match(followup_text)
+    if not fq_norm:
+        return False
+
+    cfg = prompt_store.get_config()
+    current_norm = _normalize_text_for_match(current_required_prompt or "")
+    for bank in (cfg.get("phase_question_banks", {}) or {}).values():
+        for q in bank or []:
+            q_norm = _normalize_text_for_match(q)
+            if not q_norm or q_norm == current_norm:
+                continue
+            # Treat as a leak only when one fully contains the other; this is
+            # robust against incidental token overlap on common short words.
+            if q_norm in fq_norm or fq_norm in q_norm:
+                return True
+    return False
 
 
 def _normalize_guided_followup_question(
@@ -669,6 +788,14 @@ async def maybe_build_followup_override(
             followup_question = _normalize_guided_followup_question(
                 followup_question, current_required_prompt
             )
+            # Guard against the assessment LLM borrowing a different scripted
+            # bank question as the clarifying follow-up. We treat it like the
+            # dedupe path: blank it out and let the main LLM call generate a
+            # natural reply instead of overriding with off-bank wording.
+            if followup_question and _is_bank_question_leak(
+                followup_question, current_required_prompt
+            ):
+                followup_question = ""
         normalized = followup_question.strip().lower()
         followup_sig = _followup_semantic_signature(followup_question)
         if normalized in used_followups or (followup_sig and followup_sig in used_signatures):

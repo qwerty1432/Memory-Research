@@ -29,15 +29,19 @@ def create_session(session_data: schemas.SessionCreate, db: Session = Depends(ge
     if active_session:
         active_session.ended_at = datetime.utcnow()
         logging.log_session_ended(db, user_id, active_session.session_id)
-        
-        # Cleanup session memories if in ephemeral mode
-        if user.condition_id in ["SESSION_AUTO"]:
+
+        # Cleanup session memories if in ephemeral mode. Use the condition the session
+        # was started under (snapshot stored on the session row) and fall back to the
+        # user's current condition for legacy rows where condition_id is NULL.
+        session_condition = active_session.condition_id or user.condition_id
+        if session_condition in ["SESSION_AUTO"]:
             memory_manager.cleanup_session_memories(active_session.session_id, db)
-    
+
     # Create new session
     new_session = SessionModel(
         session_id=uuid4(),
-        user_id=user_id
+        user_id=user_id,
+        condition_id=user.condition_id,
     )
     db.add(new_session)
     db.commit()
@@ -90,10 +94,12 @@ def end_session(session_id: UUID, db: Session = Depends(get_db)):
     
     logging.log_session_ended(db, session.user_id, session_id)
     
-    # Cleanup session memories if in ephemeral mode
+    # Cleanup session memories if in ephemeral mode. Prefer the condition snapshot stored on
+    # the session row; fall back to the user's current condition for legacy rows.
     user = db.query(models.User).filter(models.User.user_id == session.user_id).first()
-    if user and user.condition_id in ["SESSION_AUTO"]:
+    session_condition = session.condition_id or (user.condition_id if user else None)
+    if session_condition in ["SESSION_AUTO"]:
         memory_manager.cleanup_session_memories(session_id, db)
-    
+
     return session
 

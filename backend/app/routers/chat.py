@@ -10,7 +10,6 @@ import asyncio
 import os
 import json
 import time
-import random
 import re
 from sse_starlette.sse import EventSourceResponse
 
@@ -134,9 +133,7 @@ def _ensure_phase_prompt_order(
         and set(existing) == set(range(total))
     )
     if not valid:
-        order = list(range(total))
-        random.shuffle(order)
-        orders[phase_key] = order
+        orders[phase_key] = list(range(total))
     return orders[phase_key], orders
 
 
@@ -165,6 +162,8 @@ def advance_phase(
     phase_complete = progress["phase_complete"]
     study_complete = progress["study_complete"]
     phase_prompt_orders = progress["phase_prompt_orders"]
+    name_collected = progress.get("name_collected", True)
+    preferred_name = progress.get("preferred_name")
 
     if study_complete:
         raise HTTPException(status_code=400, detail="Study already complete")
@@ -204,10 +203,12 @@ def advance_phase(
         pending_skip_confirmation=False,
         skip_confirmation_sent=False,
         phase_prompt_orders=phase_prompt_orders,
+        name_collected=name_collected,
+        preferred_name=preferred_name,
     )
     first_prompt = ordered_prompts[0] if ordered_prompts else None
     opening_message = prompt_builder.get_phase_opening_message_for_question(
-        current_phase, first_prompt
+        current_phase, first_prompt, preferred_name=preferred_name
     )
     assistant_opening = Message(
         session_id=request.session_id,
@@ -265,6 +266,12 @@ def _get_progress_state(db: DBSession, user_id: UUID, session_id: UUID) -> dict:
     Get current progress state for single-block mode.
     Returns dict with: current_phase, current_prompt_index, followups_used_for_prompt, used_followups_for_prompt, phase_complete, study_complete.
     Defaults to phase 1, prompt 0 if no progress found.
+
+    Note on ``name_collected``: pre-existing progress events from before the
+    name-collection feature do not carry this key. We default to ``True`` for
+    those rows so legacy in-flight sessions keep their original behavior. New
+    sessions explicitly write ``name_collected=False`` in auth.py to opt in to
+    the name flow.
     """
     progress = logging.get_latest_progress(db, user_id, session_id)
     if progress:
@@ -278,8 +285,12 @@ def _get_progress_state(db: DBSession, user_id: UUID, session_id: UUID) -> dict:
             "pending_skip_confirmation": progress.get("pending_skip_confirmation", False),
             "skip_confirmation_sent": progress.get("skip_confirmation_sent", False),
             "phase_prompt_orders": progress.get("phase_prompt_orders", {}) or {},
+            "name_collected": progress.get("name_collected", True),
+            "preferred_name": progress.get("preferred_name"),
         }
-    # Default: start at phase 1, prompt 0
+    # Default: start at phase 1, prompt 0. Treat as name-already-collected so
+    # that any code path that lands here without an auth-created progress row
+    # (legacy / unusual entry) does not unexpectedly trigger the name flow.
     return {
         "current_phase": 1,
         "current_prompt_index": 0,
@@ -290,6 +301,8 @@ def _get_progress_state(db: DBSession, user_id: UUID, session_id: UUID) -> dict:
         "pending_skip_confirmation": False,
         "skip_confirmation_sent": False,
         "phase_prompt_orders": {},
+        "name_collected": True,
+        "preferred_name": None,
     }
 
 
@@ -307,6 +320,9 @@ def _update_progress_state(
     pending_skip_confirmation: bool = False,
     skip_confirmation_sent: bool = False,
     phase_prompt_orders: dict[str, list[int]] | None = None,
+    name_collected: bool = True,
+    preferred_name: str | None = None,
+    transition_bridge: bool = False,
 ):
     """Update progress state and log it."""
     logging.log_progress_update(
@@ -322,6 +338,9 @@ def _update_progress_state(
         pending_skip_confirmation=pending_skip_confirmation,
         skip_confirmation_sent=skip_confirmation_sent,
         phase_prompt_orders=phase_prompt_orders,
+        name_collected=name_collected,
+        preferred_name=preferred_name,
+        transition_bridge=transition_bridge,
     )
 
 
@@ -368,6 +387,8 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
         pending_skip_confirmation = progress["pending_skip_confirmation"]
         skip_confirmation_sent = progress["skip_confirmation_sent"]
         phase_prompt_orders = progress["phase_prompt_orders"]
+        name_collected = progress.get("name_collected", True)
+        preferred_name = progress.get("preferred_name")
     else:
         # Legacy mode: use explicit phase
         current_phase = request.phase
@@ -383,11 +404,126 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
         phase_complete = False
         study_complete = False
         phase_prompt_orders = {}
-    
+        name_collected = True
+        preferred_name = None
+
     phase_status = None
-    
+
     # Log message sent
     logging.log_message_sent(db, request.user_id, request.session_id, request.message)
+
+    # ------------------------------------------------------------------
+    # Name-collection short-circuit (Issue 7).
+    #
+    # If the session was created with name_collected=False (i.e., the
+    # name-collection opening was just sent), this turn is the user's reply
+    # to "what would you like me to call you?". We extract the preferred
+    # name with a lightweight heuristic, persist it on the progress event,
+    # and respond with the phase-1 opening message that includes the first
+    # scripted topic question. We do NOT run the assessment / progression
+    # pipeline on this turn — that prevents a one-word name reply from
+    # being flagged as an "insufficient" answer to the topic question.
+    # ------------------------------------------------------------------
+    if (
+        is_single_block_mode
+        and not name_collected
+        and not study_complete
+        and not phase_complete
+    ):
+        extracted_name = prompt_builder.extract_preferred_name(request.message) or None
+        # Build the phase-1 opening with the first scripted question,
+        # personalized with the extracted name when available.
+        phase_prompts_for_open = prompt_builder.get_phase_prompts(current_phase)
+        order_for_open, phase_prompt_orders = _ensure_phase_prompt_order(
+            phase_prompts_for_open, current_phase, phase_prompt_orders
+        )
+        ordered_for_open = _prompts_for_order(phase_prompts_for_open, order_for_open)
+        first_prompt = ordered_for_open[0] if ordered_for_open else None
+        opening_text = prompt_builder.get_phase_opening_message_for_question(
+            current_phase, first_prompt, preferred_name=extracted_name
+        )
+
+        # Persist the user message and the assistant opening as the next two rows.
+        user_message_row = Message(
+            session_id=request.session_id,
+            role="user",
+            content=request.message,
+        )
+        db.add(user_message_row)
+        assistant_message_row = Message(
+            session_id=request.session_id,
+            role="assistant",
+            content=opening_text,
+        )
+        db.add(assistant_message_row)
+        db.commit()
+        logging.log_message_received(
+            db, request.user_id, request.session_id, opening_text
+        )
+
+        # Mark the name as collected so subsequent turns run the normal flow.
+        _update_progress_state(
+            db,
+            request.user_id,
+            request.session_id,
+            current_phase=current_phase,
+            current_prompt_index=current_prompt_index,
+            followups_used_for_prompt=followups_used,
+            used_followups_for_prompt=used_followups_for_prompt,
+            phase_complete=phase_complete,
+            study_complete=study_complete,
+            pending_skip_confirmation=pending_skip_confirmation,
+            skip_confirmation_sent=skip_confirmation_sent,
+            phase_prompt_orders=phase_prompt_orders,
+            name_collected=True,
+            preferred_name=extracted_name,
+        )
+
+        # Persist the preferred name as an active memory so it appears in the
+        # `Context from previous conversations:` block on every subsequent turn.
+        # We use the existing memory_manager helper; the SESSION/PERSISTENT
+        # behavior is governed by the user's condition just like any other
+        # memory.
+        if extracted_name:
+            try:
+                cond = user.condition_id
+                auto_activate = cond in ["SESSION_AUTO", "PERSISTENT_AUTO", "PERSISTENT_USER"]
+                memory_text = f"User prefers to be called {extracted_name}."
+                if not memory_manager.check_memory_duplicate(
+                    memory_text, request.user_id, request.session_id, db
+                ):
+                    memory_manager.create_memory_candidate(
+                        request.user_id,
+                        request.session_id,
+                        memory_text,
+                        db,
+                        is_active=auto_activate,
+                        phase=current_phase if current_phase in (1, 2, 3) else None,
+                    )
+            except Exception as e:
+                # Never let memory bookkeeping break the chat reply.
+                print(f"[Chat] preferred-name memory persist error: {e}")
+
+        phase_prompts_for_status = prompt_builder.get_phase_prompts(current_phase)
+        total_prompts_for_status = len(phase_prompts_for_status)
+        all_candidates = memory_manager.get_memory_candidates(
+            request.user_id, request.session_id, db
+        )
+        return {
+            "response": opening_text,
+            "memory_candidates": [
+                schemas.MemoryResponse.model_validate(m) for m in all_candidates
+            ],
+            "phase_status": {
+                "phase": current_phase,
+                "prompts_answered": min(current_prompt_index, total_prompts_for_status),
+                "total_prompts": total_prompts_for_status,
+                "phase_complete": phase_complete,
+                "study_complete": study_complete,
+                "current_prompt_index": current_prompt_index,
+                "followups_used_for_prompt": followups_used,
+            },
+        }
 
     # Get last assistant message for follow-up evaluation
     last_assistant = (
@@ -524,6 +660,16 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                             if followup_question:
                                 followup_override = followup_question
                                 effort_result["followup_question"] = followup_question
+                            else:
+                                # No concrete follow-up string was generated (assessment
+                                # said needs_followup but the question was stripped to
+                                # empty by normalization or dedupe). Count this turn
+                                # toward the cap so we cannot stall here forever, while
+                                # still letting the main LLM call run naturally so the
+                                # companion can probe the topic in conversational form.
+                                followups_used = min(
+                                    followups_used + 1, MAX_FOLLOWUPS_PER_PROMPT
+                                )
                             should_advance_prompt = False
                     # 4) Sufficient answer: allow natural progression.
                     else:
@@ -578,6 +724,29 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                     "needs_followup": bool((effort_result or {}).get("needs_followup")),
                 },
             )
+
+        # Issue 2 — research instrumentation only.
+        # Tag this turn as a bridge introduction when the assistant reply is a
+        # plain LLM reply (not a deterministic follow-up override) AND the
+        # current topic has a configured cross-topic bridge instruction that
+        # build_phase_guided_messages would actually inject. This lets analyses
+        # distinguish bridge turns from clarifying follow-ups in the event log.
+        transition_bridge_flag = False
+        if (
+            followup_override is None
+            and not study_complete
+            and not phase_complete
+            and current_prompt_index < total_prompts
+            and context.strip()
+        ):
+            target_prompt_for_bridge = (
+                ordered_phase_prompts[current_prompt_index]
+                if ordered_phase_prompts
+                else None
+            )
+            if prompt_builder.has_bridge_instruction(target_prompt_for_bridge):
+                transition_bridge_flag = True
+
         _update_progress_state(
             db,
             request.user_id,
@@ -591,8 +760,11 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
             pending_skip_confirmation=pending_skip_confirmation,
             skip_confirmation_sent=skip_confirmation_sent,
             phase_prompt_orders=phase_prompt_orders,
+            name_collected=name_collected,
+            preferred_name=preferred_name,
+            transition_bridge=transition_bridge_flag,
         )
-        
+
         # Build phase status
         phase_prompts = prompt_builder.get_phase_prompts(current_phase)
         total_prompts = len(phase_prompts)
