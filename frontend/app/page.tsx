@@ -456,7 +456,7 @@ export default function Home() {
                 </div>
               </div>
             </div>
-          ) : (
+          ) : !isQualtrics || !showPhaseRecap ? (
             <ChatWindow
               userId={userId}
               sessionId={sessionId}
@@ -478,20 +478,22 @@ export default function Home() {
                 !(phaseProgress.study_complete ?? false)
               }
             />
-          )}
+          ) : null}
 
           {isQualtrics && showPhaseRecap && userId && sessionId && (
-            <PhaseMemoryRecap
-              userId={userId}
-              sessionId={sessionId}
-              conditionId={conditionId}
-              untilPhase={recapUntilPhase}
-              visible={showPhaseRecap}
-              onMemoriesChanged={() => {
-                memoryAPI.getCandidates(userId, sessionId).then(setMemoryCandidates);
-                memoryPanelRefreshRef.current?.();
-              }}
-            />
+            <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
+              <PhaseMemoryRecap
+                userId={userId}
+                sessionId={sessionId}
+                conditionId={conditionId}
+                untilPhase={recapUntilPhase}
+                visible={showPhaseRecap}
+                onMemoriesChanged={() => {
+                  memoryAPI.getCandidates(userId, sessionId).then(setMemoryCandidates);
+                  memoryPanelRefreshRef.current?.();
+                }}
+              />
+            </div>
           )}
           
           {/* Finish Conversation Button (Qualtrics mode only) */}

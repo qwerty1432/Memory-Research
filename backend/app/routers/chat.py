@@ -675,7 +675,15 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                     else:
                         should_advance_prompt = True
             # If followup_override is not None, we're asking a follow-up - don't advance
-            
+
+            # Router invariant: never emit another follow-up once at cap (defense in depth).
+            if followup_override is not None and followups_used >= MAX_FOLLOWUPS_PER_PROMPT:
+                followup_override = None
+                if effort_result is not None:
+                    effort_result["needs_followup"] = False
+                    effort_result["followup_cap_router_enforced"] = True
+                should_advance_prompt = True
+
             if should_advance_prompt:
                 skip_transition = bool(effort_result and effort_result.get("user_skip"))
                 # Advance to next prompt
