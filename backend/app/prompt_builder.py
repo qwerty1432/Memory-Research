@@ -783,6 +783,11 @@ async def maybe_build_followup_override(
         return followup_text, effort_result
 
     if outcome == "needs_clarifying_followup":
+        # Hard cap: if the assessment LLM ignores at_followup_cap, enforce max in code.
+        if followups_used_for_prompt >= max_followups:
+            effort_result["needs_followup"] = False
+            effort_result["followup_cap_reached"] = True
+            return None, effort_result
         followup_question = (state.get("followup_question") or "").strip()
         if guided_mode:
             followup_question = _normalize_guided_followup_question(

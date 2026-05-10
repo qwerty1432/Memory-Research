@@ -141,6 +141,47 @@ function StudyChat() {
     setLoading(false);
   };
 
+  const handleSkip = async () => {
+    if (loading || !userId || !sessionId) return;
+    const skipText = "I'd like to skip this topic.";
+    const userMsg: Message = {
+      msg_id: '',
+      session_id: sessionId,
+      role: 'user',
+      content: skipText,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setLoading(true);
+    try {
+      const resp = await chatAPI.send(userId, sessionId, skipText, null);
+      const assistantMsg: Message = {
+        msg_id: '',
+        session_id: sessionId,
+        role: 'assistant',
+        content: resp.response,
+        created_at: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
+      if (resp.phase_status) {
+        setPhaseStatus(resp.phase_status);
+      }
+      await refreshMemoriesFromServer(userId, sessionId);
+    } catch (e: any) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          msg_id: '',
+          session_id: sessionId,
+          role: 'assistant',
+          content: `Error: ${e.message}`,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    }
+    setLoading(false);
+  };
+
   const handleAdvancePhase = async () => {
     if (!userId || !sessionId) return;
     setLoading(true);
@@ -287,16 +328,27 @@ function StudyChat() {
       )}
 
       {/* input */}
-      <form onSubmit={send} className="border-t border-gray-200 bg-white/90 p-3 flex gap-2 shrink-0">
-        <input
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          placeholder={chatDisabled && !loading ? (studyComplete ? 'Study complete' : 'Phase complete — click Continue') : 'Type a message...'}
-          disabled={chatDisabled}
-          className="flex-1 px-4 py-2 text-sm rounded-full border border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#d4c5a9] disabled:bg-gray-100"
-        />
-        <button type="submit" disabled={chatDisabled || !input.trim()} className="lavender-btn text-sm disabled:opacity-50">Send</button>
-      </form>
+      <div className="border-t border-gray-200 bg-white/90 p-3 shrink-0">
+        <form onSubmit={send} className="flex gap-2">
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            placeholder={chatDisabled && !loading ? (studyComplete ? 'Study complete' : 'Phase complete — click Continue') : 'Type a message...'}
+            disabled={chatDisabled}
+            className="flex-1 px-4 py-2 text-sm rounded-full border border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#d4c5a9] disabled:bg-gray-100"
+          />
+          <button type="submit" disabled={chatDisabled || !input.trim()} className="lavender-btn text-sm disabled:opacity-50">Send</button>
+        </form>
+        {!chatDisabled && !loading && (
+          <button
+            type="button"
+            onClick={handleSkip}
+            className="text-xs text-gray-400 hover:text-gray-500 underline underline-offset-2 mt-2 block mx-auto"
+          >
+            Skip this topic
+          </button>
+        )}
+      </div>
     </div>
 
     {userId && sessionId && (
