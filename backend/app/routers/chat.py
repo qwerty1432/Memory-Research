@@ -15,8 +15,8 @@ from sse_starlette.sse import EventSourceResponse
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 QUALTRICS_PHASE_EVENT = "qualtrics_phase_session"
-MIN_FOLLOWUPS_BEFORE_ADVANCE = 2
-MAX_FOLLOWUPS_PER_PROMPT = 3
+MIN_FOLLOWUPS_BEFORE_ADVANCE = 1
+MAX_FOLLOWUPS_PER_PROMPT = 2
 MAX_BG_EXTRACTION_TASKS = int(os.getenv("MAX_BG_EXTRACTION_TASKS", "2"))
 _bg_extraction_semaphore = asyncio.Semaphore(MAX_BG_EXTRACTION_TASKS)
 MAX_CONCURRENT_CHAT_REQUESTS = int(os.getenv("MAX_CONCURRENT_CHAT_REQUESTS", "24"))

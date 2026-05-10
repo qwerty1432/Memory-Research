@@ -12,6 +12,7 @@ interface MemoryReviewPanelProps {
   onClose: () => void;
   candidates: Memory[];
   onCandidatesUpdate: () => void;
+  onRegisterRefresh?: (refresh: () => void) => void;
 }
 
 export default function MemoryReviewPanel({
@@ -22,6 +23,7 @@ export default function MemoryReviewPanel({
   onClose,
   candidates,
   onCandidatesUpdate,
+  onRegisterRefresh,
 }: MemoryReviewPanelProps) {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -84,6 +86,13 @@ export default function MemoryReviewPanel({
       console.error('Error loading memories:', error);
     }
   };
+
+  useEffect(() => {
+    if (!onRegisterRefresh) return;
+    onRegisterRefresh(() => {
+      void loadMemories();
+    });
+  }, [onRegisterRefresh, userId, sessionId]);
 
   const handleToggle = (memoryId: string) => {
     setSelected((prev) => {

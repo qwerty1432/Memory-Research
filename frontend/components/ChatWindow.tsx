@@ -24,6 +24,7 @@ interface ChatWindowProps {
   } | null) => void;
   chatInputRef?: React.RefObject<HTMLInputElement>;
   assistantAvatar?: AssistantAvatarSettings;
+  showSkipButton?: boolean;
 }
 
 export default function ChatWindow({
@@ -38,6 +39,7 @@ export default function ChatWindow({
   onPhaseStatusUpdate,
   chatInputRef,
   assistantAvatar,
+  showSkipButton = false,
 }: ChatWindowProps) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -62,20 +64,17 @@ export default function ChatWindow({
     lastMessageCountRef.current = messages.length;
   }, [messages.length]);
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || loading) return;
-
+  const sendMessage = async (content: string) => {
+    if (!content.trim() || loading) return;
     const userMessage: Message = {
       msg_id: '',
       session_id: sessionId,
       role: 'user',
-      content: input,
+      content,
       created_at: new Date().toISOString(),
     };
 
     onNewMessage(userMessage);
-    setInput('');
     setLoading(true);
     setLoadingStatus('Thinking...');
 
@@ -85,7 +84,7 @@ export default function ChatWindow({
         if (attempt > 1) {
           setLoadingStatus(`Still working on it... (attempt ${attempt}/${MAX_ATTEMPTS})`);
         }
-        const response = await chatAPI.send(userId, sessionId, input, phase ?? null);
+        const response = await chatAPI.send(userId, sessionId, content, phase ?? null);
 
         const assistantMessage: Message = {
           msg_id: '',
@@ -127,6 +126,19 @@ export default function ChatWindow({
     setLoadingStatus('');
   };
 
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const content = input.trim();
+    if (!content || loading) return;
+    setInput('');
+    await sendMessage(content);
+  };
+
+  const handleSkip = async () => {
+    if (loading) return;
+    await sendMessage("I'd like to skip this topic.");
+  };
+
   const handleSaveToMemory = async (message: Message, index: number) => {
     if (savingMessageIndex !== null) return;
     setSavingMessageIndex(index);
@@ -150,7 +162,7 @@ export default function ChatWindow({
   const avatar = assistantAvatar ?? { name: 'AI', bgColor: '#d4c5a9', symbol: '🤖' };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col flex-1 min-h-0">
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
         {messages.length === 0 && (
           <div className="text-center text-gray-500 mt-8">
@@ -230,6 +242,15 @@ export default function ChatWindow({
             Send
           </button>
         </div>
+        {showSkipButton && !loading && (
+          <button
+            type="button"
+            onClick={handleSkip}
+            className="text-xs text-gray-400 hover:text-gray-500 underline underline-offset-2 mt-2 block mx-auto"
+          >
+            Skip this topic
+          </button>
+        )}
       </form>
     </div>
   );

@@ -1,18 +1,12 @@
 'use client';
+import { getConditionDisclaimer } from '@/lib/conditionDisclaimer';
 
 interface ConditionBannerProps {
   conditionId: string;
 }
 
-const CONDITION_MESSAGES: Record<string, string> = {
-  SESSION_AUTO: 'This companion will only use your memory in this session.',
-  PERSISTENT_AUTO: 'This companion may use memory from this and future sessions.',
-  PERSISTENT_USER:
-    'This companion may use memory across sessions. You can review or alter it in Menu -> Memory.',
-};
-
 export default function ConditionBanner({ conditionId }: ConditionBannerProps) {
-  const message = CONDITION_MESSAGES[conditionId] || 'Unknown condition';
+  const message = getConditionDisclaimer(conditionId);
 
   return (
     <div className="px-4 py-3 text-sm">

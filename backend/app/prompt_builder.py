@@ -578,7 +578,7 @@ async def assess_guided_turn(
     skip_confirmation_sent: bool,
     current_required_prompt: str | None,
     followups_used_for_prompt: int,
-    max_followups: int = 3,
+    max_followups: int = 2,
 ) -> dict:
     """
     Single LLM call: skip intent, ambiguous skip offer, sufficiency, and follow-up need.
@@ -726,7 +726,7 @@ async def maybe_build_followup_override(
     """
     Single LLM assessment (assess_guided_turn) decides skip vs sufficient vs follow-up vs skip-confirm offer.
     """
-    max_followups = 3
+    max_followups = 2
     used_followups = [s.strip().lower() for s in (used_followups_for_prompt or []) if str(s).strip()]
     used_signatures = {
         _followup_semantic_signature(s)

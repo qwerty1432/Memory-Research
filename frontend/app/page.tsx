@@ -42,6 +42,7 @@ export default function Home() {
   });
   const menuButtonRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
+  const memoryPanelRefreshRef = useRef<(() => void) | null>(null);
   const [showAvatarOnboarding, setShowAvatarOnboarding] = useState(false);
   const [hasAcknowledgedDisclaimer, setHasAcknowledgedDisclaimer] = useState(false);
   const [currentPhase, setCurrentPhase] = useState<number | null>(null);
@@ -433,7 +434,7 @@ export default function Home() {
       </div>
 
       <div className="flex-1 flex overflow-hidden">
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col min-h-0">
           {/* Condition Banner above chat */}
           <div className="px-4 py-2">
             <ConditionBanner conditionId={conditionId} />
@@ -470,6 +471,12 @@ export default function Home() {
               }}
               chatInputRef={chatInputRef}
               assistantAvatar={assistantAvatar}
+              showSkipButton={
+                isQualtrics &&
+                phaseProgress != null &&
+                !phaseProgress.phase_complete &&
+                !(phaseProgress.study_complete ?? false)
+              }
             />
           )}
 
@@ -482,6 +489,7 @@ export default function Home() {
               visible={showPhaseRecap}
               onMemoriesChanged={() => {
                 memoryAPI.getCandidates(userId, sessionId).then(setMemoryCandidates);
+                memoryPanelRefreshRef.current?.();
               }}
             />
           )}
@@ -548,11 +556,17 @@ export default function Home() {
             sessionId={sessionId}
             conditionId={conditionId}
             isOpen={isMemoryPanelOpen}
-            onClose={() => setIsMemoryPanelOpen(false)}
+            onClose={() => {
+              setIsMemoryPanelOpen(false);
+              memoryPanelRefreshRef.current = null;
+            }}
             candidates={memoryCandidates}
             onCandidatesUpdate={() => {
               // Reload candidates
               memoryAPI.getCandidates(userId, sessionId).then(setMemoryCandidates);
+            }}
+            onRegisterRefresh={(refresh) => {
+              memoryPanelRefreshRef.current = refresh;
             }}
           />
         )}
