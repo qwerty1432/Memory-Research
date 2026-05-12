@@ -73,7 +73,19 @@ async def _run_memory_extraction_limited(
         )
         for candidate_text in memory_candidates_text:
             if not memory_manager.check_memory_duplicate(candidate_text, user_id, session_id, bg_db):
-                auto_activate = cond in ["SESSION_AUTO", "PERSISTENT_AUTO"]
+                # Auto-activate extracted memories for every condition. For
+                # SESSION_AUTO and PERSISTENT_AUTO this matches prior behavior.
+                # For PERSISTENT_USER this implements the 4/21 feedback ("memory
+                # could be auto-saved, with the option for users to select which
+                # memories to delete") and resolves the 5/7 desync between the
+                # end-of-phase recap (active-only) and the Memory tab (all):
+                # both views now agree because every extracted memory starts
+                # active and the user can delete what they don't want.
+                auto_activate = cond in [
+                    "SESSION_AUTO",
+                    "PERSISTENT_AUTO",
+                    "PERSISTENT_USER",
+                ]
                 memory_manager.create_memory_candidate(
                     user_id, session_id, candidate_text, bg_db, is_active=auto_activate,
                     phase=memory_phase,
@@ -637,8 +649,31 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                     # 2) "Keep going" from skip confirmation must stay on current topic.
                     elif resume_after_skip_prompt:
                         should_advance_prompt = False
-                    # 2.5) Short valid answer gate: require one LLM-anchored follow-up before advancing.
-                    elif followups_used == 0 and _is_short_valid_answer(request.message, effort_result):
+                    # 2.5) Minimum-followup gate (condition-agnostic).
+                    #
+                    # On the first turn for a topic that the assessment called
+                    # "sufficient" (i.e. would otherwise advance immediately),
+                    # require one anchored follow-up first. This is deliberately
+                    # condition-agnostic: without it the assessment LLM — which
+                    # sees condition-specific context (memory snippets vs. raw
+                    # chat) — returns "sufficient" earlier in PERSISTENT_* than
+                    # in SESSION_AUTO, producing asymmetric follow-up depth
+                    # across arms (a confound on disclosure / trust DVs).
+                    #
+                    # Generalizes the prior short-answer-specific gate: short
+                    # valid answers still get an anchored follow-up (they meet
+                    # this broader condition), and substantive answers now also
+                    # get one before advance.
+                    #
+                    # If anchored generation fails (rare; usually content-quality
+                    # rejection in the helper itself), we fall through to today's
+                    # behavior of advancing on the sufficient verdict — no stall,
+                    # no regression.
+                    elif (
+                        followups_used == 0
+                        and not needs_followup
+                        and current_required_prompt
+                    ):
                         forced_llm_followup = await prompt_builder.generate_anchored_followup_for_short_answer(
                             current_required_prompt=current_required_prompt or "",
                             user_message=request.message,
@@ -648,7 +683,13 @@ async def chat(request: schemas.ChatRequest, db: DBSession = Depends(get_db)):
                             followup_override = forced_llm_followup
                             effort_result["needs_followup"] = True
                             effort_result["followup_question"] = forced_llm_followup
-                        should_advance_prompt = False
+                            effort_result["forced_min_followup"] = True
+                            should_advance_prompt = False
+                        else:
+                            # Anchored gen failed — fall back to today's
+                            # behavior (advance on sufficient verdict).
+                            effort_result["forced_min_followup_failed"] = True
+                            should_advance_prompt = True
                     # 3) Insufficient answer: ask follow-up up to cap; then advance.
                     elif needs_followup:
                         if followups_used >= MAX_FOLLOWUPS_PER_PROMPT:
@@ -1064,7 +1105,13 @@ async def chat_stream(request: schemas.ChatRequest, db: DBSession = Depends(get_
                         request.session_id,
                         db
                     ):
-                        auto_activate = condition in ["SESSION_AUTO", "PERSISTENT_AUTO"]
+                        # Auto-activate for all conditions (see non-stream path
+                        # for rationale: 4/21 feedback + 5/7 recap/tab desync).
+                        auto_activate = condition in [
+                            "SESSION_AUTO",
+                            "PERSISTENT_AUTO",
+                            "PERSISTENT_USER",
+                        ]
                         # Not a duplicate, create the candidate
                         memory = memory_manager.create_memory_candidate(
                             request.user_id,

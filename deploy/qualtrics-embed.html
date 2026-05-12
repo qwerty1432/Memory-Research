@@ -23,6 +23,17 @@
       • chatbot_agent_color
     This lets you capture what avatar the participant chose for analysis.
 
+  NOTE ON COMPLETION TRACKING:
+  - Per-participant completion stats (prompts answered, phases completed,
+    chat duration, etc.) live in the chatbot's own database (events table),
+    keyed by the Qualtrics ResponseID. Join on ResponseID after the run
+    for analysis. We deliberately do NOT push these to Qualtrics Embedded
+    Data — that's only needed if you want Qualtrics Survey Flow to branch
+    on completion at runtime (e.g. different CR completion codes for full
+    vs. partial completers). If you decide to go that route later, extend
+    notifyQualtricsFinished in frontend/lib/qualtrics.ts and add matching
+    ED handlers to the message listener below.
+
   ============================================================================
 -->
 

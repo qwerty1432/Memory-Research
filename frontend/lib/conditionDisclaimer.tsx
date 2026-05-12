@@ -15,8 +15,9 @@ export const CONDITION_DISCLAIMER_COPY: Record<string, ReactNode> = {
   ),
   PERSISTENT_USER: (
     <>
-      This companion may use memory <strong>across sessions</strong>. You can review or alter it in
-      Menu -&gt; Memory. <strong>Any deleted memories will not carry into future sessions.</strong>
+      This companion automatically saves memories from your conversation and uses them{' '}
+      <strong>across sessions</strong>. You can review, edit, or delete any of them in
+      Menu -&gt; Memory. <strong>Any memories you delete will not carry into future sessions.</strong>
     </>
   ),
 };

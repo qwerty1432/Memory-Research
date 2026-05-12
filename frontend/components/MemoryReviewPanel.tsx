@@ -171,7 +171,11 @@ export default function MemoryReviewPanel({
       <div className="p-5 border-b border-white/60 flex justify-between items-center bg-white/60 backdrop-blur-xl">
         <div>
           <h2 className="text-lg font-semibold text-[#1a1a1a]">Memory Review</h2>
-          <p className="text-xs text-[#6c4c99]">Approve or edit what the assistant remembers.</p>
+          <p className="text-xs text-[#6c4c99]">
+            {isUserControlled
+              ? 'Memories are saved automatically. Edit or delete any you do not want kept.'
+              : 'Review what the assistant remembers about you.'}
+          </p>
           <p className="text-xs text-gray-600 mt-1">{memoryDisclaimer}</p>
         </div>
         <button

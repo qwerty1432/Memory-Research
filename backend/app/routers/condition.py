@@ -9,7 +9,7 @@ router = APIRouter(prefix="/condition", tags=["condition"])
 CONDITION_DESCRIPTIONS = {
     "SESSION_AUTO": "Your conversation will not be saved after this session ends.",
     "PERSISTENT_AUTO": "Your conversation is automatically saved and will persist in future sessions.",
-    "PERSISTENT_USER": "You can choose which information to save, edit, or delete, and it will persist in future sessions."
+    "PERSISTENT_USER": "Memories from your conversation are saved automatically. You can edit or delete any of them, and your changes will persist in future sessions."
 }
 
 
